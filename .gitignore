@@ -1,0 +1,36 @@
+# Data (downloaded from Zenodo — keep out of git)
+data/
+*.bed
+*.bed.gz
+*.bw
+*.bigwig
+*.fa
+*.fasta
+*.fa.gz
+*.fasta.gz
+*.2bit
+
+# Model artifacts
+*.pt
+*.pth
+*.ckpt
+*.h5
+*.onnx
+checkpoints/
+runs/
+wandb/
+
+# Python
+__pycache__/
+*.py[cod]
+.venv/
+venv/
+env/
+.ipynb_checkpoints/
+*.egg-info/
+.pytest_cache/
+
+# OS / editor
+.DS_Store
+.idea/
+.vscode/
