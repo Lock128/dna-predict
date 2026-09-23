@@ -1,0 +1,93 @@
+name: Deploy infrastructure
+
+# CI/CD for the EPIC (dna-predict) AWS infrastructure.
+#
+# - Pull requests: build + `cdk synth` only (validation, no AWS changes).
+# - Push to main:  build + `cdk deploy` to the target account via GitHub OIDC.
+#
+# No long-lived AWS keys: the deploy job assumes an IAM role through OIDC. The
+# role's trust policy is scoped to this repo + main branch (see
+# infra/lib/github-oidc.ts). Configure these repo settings first:
+#   Variables: AWS_REGION, AWS_ACCOUNT_ID, AWS_DEPLOY_ROLE_ARN
+#   (see infra/README.md for the one-time bootstrap.)
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+    branches: [main]
+
+# Least privilege: only the deploy job requests id-token (OIDC).
+permissions:
+  contents: read
+
+concurrency:
+  group: deploy-${{ github.ref }}
+  cancel-in-progress: false
+
+jobs:
+  validate:
+    name: Build & synth
+    runs-on: ubuntu-latest
+    defaults:
+      run:
+        working-directory: infra
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-node@v4
+        with:
+          node-version: "22"
+          cache: npm
+          cache-dependency-path: infra/package-lock.json
+
+      - run: npm ci
+      - run: npm run build
+      - run: npx cdk synth
+        env:
+          # Synth doesn't need credentials; pass through if provided so any
+          # environment-specific context resolves the same as on deploy.
+          CDK_DEPLOY_ACCOUNT: ${{ vars.AWS_ACCOUNT_ID }}
+          CDK_DEPLOY_REGION: ${{ vars.AWS_REGION }}
+
+  deploy:
+    name: Deploy to AWS
+    runs-on: ubuntu-latest
+    # Only from main, never on PRs from forks.
+    if: github.event_name == 'push' && github.ref == 'refs/heads/main'
+    needs: validate
+    environment: production
+    permissions:
+      contents: read
+      id-token: write # required for OIDC
+    defaults:
+      run:
+        working-directory: infra
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-node@v4
+        with:
+          node-version: "22"
+          cache: npm
+          cache-dependency-path: infra/package-lock.json
+
+      - name: Configure AWS credentials (OIDC)
+        uses: aws-actions/configure-aws-credentials@v4
+        with:
+          role-to-assume: ${{ vars.AWS_DEPLOY_ROLE_ARN }}
+          aws-region: ${{ vars.AWS_REGION }}
+          role-session-name: gha-dna-predict-deploy
+
+      - run: npm ci
+      - run: npm run build
+
+      - name: CDK deploy
+        run: npx cdk deploy --require-approval never
+        env:
+          CDK_DEPLOY_ACCOUNT: ${{ vars.AWS_ACCOUNT_ID }}
+          CDK_DEPLOY_REGION: ${{ vars.AWS_REGION }}
+          # The account already has the OIDC provider after the first deploy;
+          # keep creating the role here (idempotent for this stack).
+          EPIC_GITHUB_REPO: ${{ github.repository }}
+          EPIC_GITHUB_BRANCH: main

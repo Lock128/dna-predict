@@ -2,8 +2,8 @@
  * Central configuration for the EPIC (dna-predict) infrastructure.
  *
  * Values are resolved from environment variables / CDK context so the same app
- * can be deployed directly (developer runs `cdk deploy`) or through the CI/CD
- * pipeline to a target account.
+ * can be deployed by a developer (`cdk deploy`) or by the GitHub Actions
+ * workflow (which assumes an OIDC deploy role and runs the same command).
  */
 
 export interface EpicEnv {
@@ -32,46 +32,37 @@ export interface EpicConfig {
   readonly downloadJobVcpu: number;
   readonly downloadJobMemoryMiB: number;
 
-  /** Optional CI/CD (CDK Pipelines) configuration; omitted for direct deploys. */
-  readonly pipeline?: PipelineConfig;
+  /** GitHub OIDC configuration for the CI/CD deploy role. */
+  readonly github: GitHubConfig;
 }
 
-export interface PipelineConfig {
-  /** Account/region the pipeline itself lives in (usually a tooling account). */
-  readonly env: EpicEnv;
-  /** Source repository connection (CodeStar connection to GitHub). */
-  readonly connectionArn: string;
-  /** "owner/repo" on GitHub. */
+export interface GitHubConfig {
+  /** "owner/repo" — the GitHub repository allowed to deploy. */
   readonly repo: string;
-  /** Branch that triggers the pipeline. */
+  /** Branch allowed to deploy (deployments only run from here). */
   readonly branch: string;
+  /**
+   * Whether this stack should create the GitHub OIDC provider + deploy role.
+   * Set false if the account already has a GitHub OIDC provider (only one is
+   * allowed per account) or the role is managed elsewhere.
+   */
+  readonly createDeployRole: boolean;
 }
 
 function env(name: string, fallback?: string): string | undefined {
   return process.env[name] ?? fallback;
 }
 
+function bool(name: string, fallback: boolean): boolean {
+  const v = process.env[name];
+  if (v === undefined) return fallback;
+  return ["1", "true", "yes", "on"].includes(v.toLowerCase());
+}
+
 /** Build the config from environment, with sensible defaults for the challenge. */
 export function loadConfig(): EpicConfig {
   const region = env("CDK_DEPLOY_REGION", env("CDK_DEFAULT_REGION", "eu-central-1"))!;
   const account = env("CDK_DEPLOY_ACCOUNT", env("CDK_DEFAULT_ACCOUNT"));
-
-  const connectionArn = env("EPIC_PIPELINE_CONNECTION_ARN");
-  const repo = env("EPIC_PIPELINE_REPO", "your-org/dna-predict")!;
-  const branch = env("EPIC_PIPELINE_BRANCH", "main")!;
-  const pipelineAccount = env("EPIC_PIPELINE_ACCOUNT", account);
-  const pipelineRegion = env("EPIC_PIPELINE_REGION", region)!;
-
-  // The pipeline is only wired up when a CodeStar connection ARN is supplied,
-  // otherwise we assume a direct `cdk deploy` of the application stack.
-  const pipeline: PipelineConfig | undefined = connectionArn
-    ? {
-        env: { account: pipelineAccount, region: pipelineRegion },
-        connectionArn,
-        repo,
-        branch,
-      }
-    : undefined;
 
   return {
     prefix: env("EPIC_PREFIX", "epic")!,
@@ -81,6 +72,10 @@ export function loadConfig(): EpicConfig {
     epicJobMemoryMiB: Number(env("EPIC_JOB_MEMORY_MIB", "16384")),
     downloadJobVcpu: Number(env("EPIC_DOWNLOAD_VCPU", "2")),
     downloadJobMemoryMiB: Number(env("EPIC_DOWNLOAD_MEMORY_MIB", "8192")),
-    pipeline,
+    github: {
+      repo: env("EPIC_GITHUB_REPO", "Lock128/dna-predict")!,
+      branch: env("EPIC_GITHUB_BRANCH", "main")!,
+      createDeployRole: bool("EPIC_CREATE_DEPLOY_ROLE", true),
+    },
   };
 }

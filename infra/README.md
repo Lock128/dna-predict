@@ -3,8 +3,8 @@
 TypeScript CDK app that deploys everything needed to run the `epic` pipeline on
 AWS: object storage, the container image, an AWS Batch (Graviton/Fargate)
 compute stack, an automated Zenodo → S3 data-ingestion workflow, and a launcher
-to trigger container runs. It can be deployed directly or through a self-mutating
-CI/CD pipeline.
+to trigger container runs. It can be deployed locally or via GitHub Actions
+(OIDC) on push to `main`.
 
 ## What gets created
 
@@ -20,7 +20,8 @@ AppStack (epic-app)
 │   └── EcsJobDefinition "epic-download" — streams Zenodo files to S3 (aws-cli)
 ├── Ingestion — Step Functions state machine:
 │       PrepareDownload (Lambda) → RunDownloadJob (Batch .sync) → VerifyDownload (Lambda)
-└── Launcher — Lambda that submits epic Batch jobs on demand
+├── Launcher — Lambda that submits epic Batch jobs on demand
+└── GitHubDeploy — OIDC provider + deploy role for GitHub Actions CI/CD
 ```
 
 Key stack outputs: `DataBucketName`, `JobQueueArn`, `EpicJobDefinitionArn`,
@@ -52,15 +53,11 @@ npm run build      # tsc
 | `EPIC_ZENODO_RECORD` | `22285753` | Zenodo record id to ingest |
 | `EPIC_JOB_VCPU` / `EPIC_JOB_MEMORY_MIB` | `4` / `16384` | epic job size |
 | `EPIC_DOWNLOAD_VCPU` / `EPIC_DOWNLOAD_MEMORY_MIB` | `2` / `8192` | download job size |
-| `EPIC_PIPELINE_CONNECTION_ARN` | — | **set to enable pipeline mode** |
-| `EPIC_PIPELINE_REPO` | `your-org/dna-predict` | GitHub `owner/repo` |
-| `EPIC_PIPELINE_BRANCH` | `main` | branch that triggers the pipeline |
-| `EPIC_PIPELINE_ACCOUNT` / `EPIC_PIPELINE_REGION` | target acct/region | where the pipeline runs |
+| `EPIC_GITHUB_REPO` | `Lock128/dna-predict` | repo allowed to deploy via OIDC |
+| `EPIC_GITHUB_BRANCH` | `main` | branch allowed to deploy |
+| `EPIC_CREATE_DEPLOY_ROLE` | `true` | create the GitHub OIDC provider + deploy role |
 
-The app is in **direct mode** unless `EPIC_PIPELINE_CONNECTION_ARN` is set, in
-which case it deploys the **pipeline** instead.
-
-## Deploy — direct mode (dev/sandbox)
+## Deploy — locally (also the one-time bootstrap for CI/CD)
 
 ```bash
 # one-time per account/region
@@ -70,29 +67,37 @@ export CDK_DEPLOY_ACCOUNT=<account> CDK_DEPLOY_REGION=eu-central-1
 npx cdk deploy        # builds the image, creates all resources
 ```
 
-## Deploy — CI/CD pipeline mode
+This first deploy also creates the **GitHub OIDC provider** and the
+**deploy role** used by CI/CD. Grab the `DeployRoleArn` from the stack outputs.
 
-The pipeline is a self-mutating CDK Pipeline: pushes to the branch update the
-pipeline and redeploy the app. It uses a privileged ARM CodeBuild to build the
-Docker image.
+## Deploy — CI/CD via GitHub Actions
 
-1. Create a **CodeStar connection** to GitHub (Console → Developer Tools →
-   Connections) and authorize it; copy the connection ARN.
-2. Bootstrap both the pipeline account and (if different) the target account,
-   trusting the pipeline account:
-   ```bash
-   npx cdk bootstrap aws://<pipeline-acct>/<region>
-   npx cdk bootstrap aws://<target-acct>/<region> \
-     --trust <pipeline-acct> \
-     --cloudformation-execution-policies arn:aws:iam::aws:policy/AdministratorAccess
-   ```
-3. Deploy the pipeline once; it self-manages after that:
-   ```bash
-   export EPIC_PIPELINE_CONNECTION_ARN=arn:aws:codestar-connections:...:connection/...
-   export EPIC_PIPELINE_REPO=your-org/dna-predict EPIC_PIPELINE_BRANCH=main
-   export CDK_DEPLOY_ACCOUNT=<target-acct> CDK_DEPLOY_REGION=eu-central-1
-   npx cdk deploy epic-pipeline
-   ```
+CI/CD is a GitHub Actions workflow ([`.github/workflows/deploy.yml`](../.github/workflows/deploy.yml)):
+
+- **Pull requests** → build + `cdk synth` (validation only).
+- **Push to `main`** → build + `cdk deploy`, authenticating to AWS through
+  **OIDC** (no stored AWS keys). The deploy role trusts only
+  `repo:Lock128/dna-predict:ref:refs/heads/main`.
+
+One-time setup:
+
+1. Deploy once locally (above) so the OIDC provider + deploy role exist. Note
+   the `DeployRoleArn` output.
+2. In the GitHub repo (Settings → Secrets and variables → Actions →
+   **Variables**), set:
+   - `AWS_REGION` — e.g. `eu-central-1`
+   - `AWS_ACCOUNT_ID` — the target account id
+   - `AWS_DEPLOY_ROLE_ARN` — the `DeployRoleArn` output
+3. (Recommended) Add a `production` **Environment** in GitHub with required
+   reviewers to gate deploys.
+
+After that, every push to `main` deploys automatically.
+
+> **Note — one OIDC provider per account.** An AWS account can have only one
+> GitHub OIDC provider. If the account already has one (e.g. shared with other
+> repos), deploy with `EPIC_CREATE_DEPLOY_ROLE=false` and create/point the role
+> at the existing provider, or import it. The stack creates provider + role by
+> default for a fresh account.
 
 ## Run it
 

@@ -174,8 +174,8 @@ deployable via CI/CD — see [`infra/README.md`](../infra/README.md). It provisi
 - a **Step Functions + Lambda** ingestion workflow that downloads the Zenodo
   dataset into S3 automatically (a Batch download job does the heavy transfer),
 - a **launcher Lambda** to trigger `epic` container runs on Batch, and
-- an optional **CDK Pipelines** CI/CD that builds the image and deploys to a
-  target account on every push.
+- a **GitHub Actions** CI/CD workflow that deploys on push to `main` via an
+  OIDC deploy role (no stored AWS keys).
 
 Once deployed: start the ingestion state machine to load the data, then invoke
 the launcher (or `aws batch submit-job`) to run the pipeline.

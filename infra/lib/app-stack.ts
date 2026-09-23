@@ -11,6 +11,7 @@ import { Storage } from "./storage";
 import { BatchCompute } from "./batch-compute";
 import { Ingestion } from "./ingestion";
 import { JobLauncher } from "./job-launcher";
+import { GitHubDeployRole } from "./github-oidc";
 
 export interface AppStackProps extends StackProps {
   readonly config: EpicConfig;
@@ -54,6 +55,18 @@ export class AppStack extends Stack {
       epicJobDefinition: compute.epicJobDefinition,
       dataBucket: storage.dataBucket,
     });
+
+    // GitHub Actions OIDC deploy role (only pushes to the configured repo/branch
+    // can assume it). Optional so the account's single OIDC provider isn't
+    // duplicated if it already exists.
+    if (config.github.createDeployRole) {
+      new GitHubDeployRole(this, "GitHubDeploy", {
+        prefix: config.prefix,
+        repo: config.github.repo,
+        branch: config.github.branch,
+        createProvider: true,
+      });
+    }
 
     // --- handy outputs ------------------------------------------------------
     new CfnOutput(this, "DataBucketName", { value: storage.dataBucket.bucketName });
