@@ -189,6 +189,27 @@ bucket is **retained**. You can also run the manual **Destroy** GitHub Actions
 workflow ([`.github/workflows/destroy.yml`](../.github/workflows/destroy.yml)),
 which requires typing `destroy` to confirm.
 
+## Using this to solve the EPIC challenge
+
+The challenge (see [`PROBLEM.md`](../PROBLEM.md)) is: train on the 80–95% of each
+genome we're given, predict the held-out contigs from sequence, and beat the
+dinucleotide baseline (scored by AUPRC + Spearman). This infra is the machine
+that runs that loop at genome scale:
+
+1. **Ingest** the Zenodo data into S3 (`scripts/ingest.sh`).
+2. **Run** `epic baseline` per species as a Batch job, fitting on the train
+   contigs and predicting the held-out ones (`scripts/run-epic.sh`); each
+   species is an independent job, so they run in parallel.
+3. **Score** against the held-out split (in-crate metrics) and cross-check the
+   published *Nematostella* set with the official scoring scripts.
+4. **Iterate** by changing only the container command (`--k`, contig splits,
+   `--species`); scale to a GPU compute env / SageMaker only when moving to a
+   CNN or pretrained models (AlphaGenome / Evo 2).
+
+The full command-by-command walkthrough — including the exact `epic baseline`
+invocation and the remaining container⇄S3 glue step — is in
+[**docs/AWS.md → Solving the EPIC challenge**](../docs/AWS.md#solving-the-epic-challenge-on-this-infrastructure).
+
 ## Useful commands
 
 ```bash

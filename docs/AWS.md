@@ -330,6 +330,121 @@ the queue. Batch tasks run on Fargate ARM64 in **public subnets with public IPs
 but an egress-only security group** (no inbound), and reach S3 through a free
 gateway endpoint — so there is **no NAT gateway** and effectively no idle cost.
 
+## Solving the EPIC challenge on this infrastructure
+
+This ties the infrastructure back to the actual challenge (see
+[`PROBLEM.md`](../PROBLEM.md)). EPIC gives us the initiation signal for
+**80–95% of each genome** (the *train* contigs) and asks us to predict the
+**held-out** contigs from sequence alone, scored genome-wide by **AUPRC**
+(is there initiation here?) and **Spearman** (how strong?), aggregated by
+log-rank. The bar to clear is the **dinucleotide baseline**, and we validate
+end-to-end on the published *Nematostella* dataset before touching the real
+species.
+
+Here is how each challenge step maps onto the deployed pipeline.
+
+### Step 0 — Deploy + validate on Nematostella
+
+`Nematostella` is published (train **and** test labels are known), so it's our
+correctness harness: if our submission scores well against the official scoring
+scripts here, the pipeline is sound.
+
+```bash
+npm run aws:deploy                    # infra + image (or push to main)
+scripts/ingest.sh <nematostella_record> --wait   # data -> s3://.../raw/<record>/
+```
+
+### Step 1 — Get the challenge data into S3
+
+```bash
+scripts/ingest.sh 22285753 --wait     # the EPIC 5-species Zenodo record
+```
+
+The ingestion workflow lands the genomes and the strand-separated,
+two-replicate csRNA-seq bedGraph tracks under `raw/<record>/`. This is the
+input the `epic` container reads.
+
+### Step 2 — Run the dinucleotide baseline per species (the bar to beat)
+
+For each species we **fit on the train contigs** and **predict the held-out
+contigs**, writing a submission to S3. The `epic baseline` command already does
+fit → predict → (score) in one shot; we point it at the S3-synced data and pass
+the train/test contig split the challenge defines.
+
+```bash
+scripts/run-epic.sh --species pacific_oyster -- \
+  baseline \
+  --genome    /data/raw/22285753/oyster/genome.fa \
+  --plus      /data/raw/22285753/oyster/initiation.plus.bedgraph \
+  --minus     /data/raw/22285753/oyster/initiation.minus.bedgraph \
+  --train-contigs "$(cat oyster.train.txt)" \
+  --test-contigs  "$(cat oyster.test.txt)" \
+  --out       /data/submissions/oyster.baseline.tsv
+```
+
+Run this once per species (octopus, oyster, moth, milkweed bug, dogfish). Each
+run is an independent Fargate job — submit them together and they run in
+parallel on the queue. Watch progress with `scripts/logs.sh`.
+
+> **Data access note:** the paths above assume the container has the data at
+> `/data`. Today the job role can read/write the bucket; wiring the container to
+> sync `s3://.../raw/<species>` to local `/data` on start (or read directly from
+> S3) is the one remaining glue step — see *Follow-ups* below. Until then, the
+> same `epic baseline` command runs on a laptop or the EC2 box in section 2.
+
+### Step 3 — Score and compare to the baseline
+
+Our in-crate scoring (`epic`'s `scoring` module) reports **AUPRC** and
+**Spearman** for a held-out split, so we can rank our own experiments. But the
+**official** scoring scripts are authoritative — cross-check the S3 submission
+against them (that's exactly what the *Nematostella* replica is for) before
+trusting leaderboard-relative numbers.
+
+```bash
+scripts/run-epic.sh --species nematostella -- \
+  baseline --genome /data/.../genome.fa \
+           --plus /data/.../plus.bedgraph --minus /data/.../minus.bedgraph \
+           --test-contigs "$(cat nema.test.txt)" \
+           --out /data/submissions/nema.baseline.tsv
+# then run the official scoring script against nema.baseline.tsv locally
+```
+
+### Step 4 — Iterate toward beating the baseline
+
+The infra doesn't change as the model improves — only the container command and
+(for heavier models) the job size do:
+
+- **Bigger dinucleotide/k-mer sweeps:** pass `--k 3` / `--k 4` to see how far
+  pure composition goes. Same job, trivial cost.
+- **A sequence CNN or pretrained models (AlphaGenome, Evo 2):** these need a
+  GPU. AWS Batch Fargate is CPU-only, so add a **GPU compute environment**
+  (EC2 `g5`/`g6`, or move that step to **SageMaker** training jobs) and a second
+  job definition — the S3 data hub, ingestion, and submission flow stay the
+  same. This is the section 3 "scale up only for the job that needs it" path.
+- **Cross-species experiments** (train-on-four / test-on-one, or pooled) are
+  just different `--train-contigs`/`--test-contigs` and `--species` arguments to
+  the same job.
+
+### Producing the actual leaderboard submission
+
+For the real (unlabeled) test contigs there is no local score — run with
+`--no-score` and upload the resulting per-position, per-strand TSV from
+`s3://.../submissions/` to the EPIC leaderboard.
+
+### Follow-ups to make this fully hands-off
+
+- **Container ⇄ S3 data:** add an entrypoint wrapper (or use the container's
+  `DATA_BUCKET` env) so the job syncs its species' `raw/` prefix to `/data` and
+  its output back to `submissions/` automatically. Right now the job role has
+  the permissions; the sync step is the glue to add.
+- **Contig splits:** commit the per-species train/test contig lists (or derive
+  them from the dataset manifest) so runs are reproducible.
+- **Official scoring in-cloud:** optionally add a small "score" job definition
+  that runs the organizers' scoring script on a submission for a
+  labeled species (Nematostella), so validation is one command too.
+
+---
+
 ## Summary / decision
 
 - **Start with:** S3 for storage + one start/stop Graviton EC2 box for the
