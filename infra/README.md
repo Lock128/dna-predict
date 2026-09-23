@@ -79,12 +79,14 @@ CI/CD is a GitHub Actions workflow ([`.github/workflows/deploy.yml`](../.github/
   **OIDC** by assuming an existing IAM role (no stored AWS keys).
 
 The GitHub↔AWS OIDC connection and the deploy role are assumed to **already
-exist** (managed outside this repo). The workflow just needs these repo
-**secrets** (Settings → Secrets and variables → Actions → Secrets):
+exist** (managed outside this repo). Configure (Settings → Secrets and variables
+→ Actions):
 
-- `AWS_REGION` — e.g. `eu-central-1`
-- `AWS_ACCOUNT_ID` — the target account id
-- `AWS_DEPLOY_ROLE_ARN` — ARN of the role GitHub Actions assumes
+- **Secret** `AWS_ROLE_ARN` — ARN of the role GitHub Actions assumes via OIDC
+- **Variable** `AWS_REGION` — target region (defaults to `eu-central-1` if unset)
+
+The account id is derived from the assumed role (via STS), so there's no
+`AWS_ACCOUNT_ID` to set.
 
 The deploy job runs in a `production` GitHub **Environment**, which you can gate
 with required reviewers. Every push to `main` then deploys automatically.

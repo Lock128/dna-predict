@@ -6,9 +6,10 @@ name: Deploy infrastructure
 # - Push to main:  build + `cdk deploy` to the target account via GitHub OIDC.
 #
 # No long-lived AWS keys: the deploy job assumes an existing IAM role through
-# OIDC (the GitHub <> AWS connection is assumed to already exist). Configure
-# these repo secrets:
-#   Secrets: AWS_REGION, AWS_ACCOUNT_ID, AWS_DEPLOY_ROLE_ARN
+# OIDC (the GitHub <> AWS connection is assumed to already exist). Configure:
+#   Secret:   AWS_ROLE_ARN  — ARN of the role GitHub Actions assumes
+#   Variable: AWS_REGION    — target region (defaults to eu-central-1 if unset)
+# The account id is derived from the assumed role, so no AWS_ACCOUNT_ID needed.
 
 on:
   push:
@@ -44,10 +45,8 @@ jobs:
       - run: npm run build
       - run: npx cdk synth
         env:
-          # Synth doesn't need credentials; pass through if provided so any
-          # environment-specific context resolves the same as on deploy.
-          CDK_DEPLOY_ACCOUNT: ${{ secrets.AWS_ACCOUNT_ID }}
-          CDK_DEPLOY_REGION: ${{ secrets.AWS_REGION }}
+          # Synth doesn't need credentials; region only affects context.
+          CDK_DEPLOY_REGION: ${{ vars.AWS_REGION || 'eu-central-1' }}
 
   deploy:
     name: Deploy to AWS
@@ -74,8 +73,8 @@ jobs:
       - name: Configure AWS credentials (OIDC)
         uses: aws-actions/configure-aws-credentials@v4
         with:
-          role-to-assume: ${{ secrets.AWS_DEPLOY_ROLE_ARN }}
-          aws-region: ${{ secrets.AWS_REGION }}
+          role-to-assume: ${{ secrets.AWS_ROLE_ARN }}
+          aws-region: ${{ vars.AWS_REGION || 'eu-central-1' }}
           role-session-name: gha-dna-predict-deploy
 
       - run: npm ci
@@ -84,5 +83,6 @@ jobs:
       - name: CDK deploy
         run: npx cdk deploy --require-approval never
         env:
-          CDK_DEPLOY_ACCOUNT: ${{ secrets.AWS_ACCOUNT_ID }}
-          CDK_DEPLOY_REGION: ${{ secrets.AWS_REGION }}
+          # Account is taken from the assumed-role identity (CDK_DEFAULT_ACCOUNT,
+          # set by configure-aws-credentials); region from the variable.
+          CDK_DEPLOY_REGION: ${{ vars.AWS_REGION || 'eu-central-1' }}

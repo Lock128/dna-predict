@@ -4,19 +4,19 @@ name: CDK bootstrap
 # Triggered manually from the Actions tab. Uses the same OIDC deploy role and
 # secrets as the deploy workflow.
 #
-# Required secrets — because this job runs in the `production` environment,
-# these must be visible to it: set them either as REPOSITORY secrets or as
-# secrets on the `production` ENVIRONMENT (Settings → Environments → production):
-#   AWS_REGION, AWS_ACCOUNT_ID, AWS_DEPLOY_ROLE_ARN
+# Configure:
+#   Secret:   AWS_ROLE_ARN — ARN of the role GitHub Actions assumes
+#   Variable: AWS_REGION   — target region (defaults to eu-central-1)
+# The account id is derived from the assumed role via STS.
 #
-# The deploy role must be permitted to create the CDK bootstrap resources
+# The role must be permitted to create the CDK bootstrap resources
 # (CloudFormation "CDKToolkit" stack, the cdk-* roles, the assets bucket/ECR).
 
 on:
   workflow_dispatch:
     inputs:
       region:
-        description: "AWS region to bootstrap (defaults to the AWS_REGION secret)"
+        description: "AWS region to bootstrap (defaults to the AWS_REGION variable)"
         required: false
         type: string
 
@@ -47,39 +47,30 @@ jobs:
           cache: npm
           cache-dependency-path: infra/package-lock.json
 
-      - name: Check required secrets
-        env:
-          AWS_ACCOUNT_ID: ${{ secrets.AWS_ACCOUNT_ID }}
-          AWS_REGION: ${{ secrets.AWS_REGION }}
-          AWS_DEPLOY_ROLE_ARN: ${{ secrets.AWS_DEPLOY_ROLE_ARN }}
+      - name: Check required secret
         run: |
-          missing=0
-          for v in AWS_ACCOUNT_ID AWS_DEPLOY_ROLE_ARN; do
-            if [ -z "${!v}" ]; then echo "::error::secret $v is empty or not set"; missing=1; fi
-          done
-          if [ -z "${AWS_REGION}" ] && [ -z "${{ inputs.region }}" ]; then
-            echo "::error::AWS_REGION secret is empty and no region input given"; missing=1
-          fi
-          if [ "$missing" = "1" ]; then
-            echo "::error::Set these as secrets on the 'production' environment (or repository). See infra/README.md."
+          if [ -z "${{ secrets.AWS_ROLE_ARN }}" ]; then
+            echo "::error::secret AWS_ROLE_ARN is empty or not set. Add it in repo/environment secrets (see infra/README.md)."
             exit 1
           fi
 
       - name: Resolve region
         id: region
-        run: echo "value=${{ inputs.region != '' && inputs.region || secrets.AWS_REGION }}" >> "$GITHUB_OUTPUT"
+        run: echo "value=${{ inputs.region != '' && inputs.region || vars.AWS_REGION || 'eu-central-1' }}" >> "$GITHUB_OUTPUT"
 
       - name: Configure AWS credentials (OIDC)
         uses: aws-actions/configure-aws-credentials@v4
         with:
-          role-to-assume: ${{ secrets.AWS_DEPLOY_ROLE_ARN }}
+          role-to-assume: ${{ secrets.AWS_ROLE_ARN }}
           aws-region: ${{ steps.region.outputs.value }}
           role-session-name: gha-dna-predict-bootstrap
 
       - run: npm ci
 
       - name: CDK bootstrap
-        run: npx cdk bootstrap "aws://${{ secrets.AWS_ACCOUNT_ID }}/${{ steps.region.outputs.value }}"
+        run: |
+          ACCOUNT_ID="$(aws sts get-caller-identity --query Account --output text)"
+          echo "Bootstrapping aws://${ACCOUNT_ID}/${{ steps.region.outputs.value }}"
+          npx cdk bootstrap "aws://${ACCOUNT_ID}/${{ steps.region.outputs.value }}"
         env:
-          CDK_DEPLOY_ACCOUNT: ${{ secrets.AWS_ACCOUNT_ID }}
           CDK_DEPLOY_REGION: ${{ steps.region.outputs.value }}
