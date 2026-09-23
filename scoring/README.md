@@ -15,8 +15,9 @@ real evaluation. Use it to confirm that:
 
 - `README.md` — this file.
 - (add) the official EPIC scoring scripts, once downloaded, so we score exactly
-  as the leaderboard does. Our in-repo `dna_predict.scoring` module is a
-  *replica* for fast iteration — the official scripts are authoritative.
+  as the leaderboard does. Our in-repo scoring (the `scoring` module of the Rust
+  `epic` crate) is a *replica* for fast iteration — the official scripts are
+  authoritative.
 
 ## Quick start
 
@@ -25,14 +26,14 @@ Download the Nematostella data + genomes from Zenodo
 `data/nematostella/`, then run the dinucleotide baseline end to end:
 
 ```bash
-pip install -e .
+cd rust && cargo build --release
 
-dna-predict baseline \
-  --genome data/nematostella/genome.fa \
-  --plus   data/nematostella/initiation.plus.bedgraph \
-  --minus  data/nematostella/initiation.minus.bedgraph \
+./target/release/epic baseline \
+  --genome ../data/nematostella/genome.fa \
+  --plus   ../data/nematostella/initiation.plus.bedgraph \
+  --minus  ../data/nematostella/initiation.minus.bedgraph \
   --test-contigs <held_out_contig> \
-  --out submission.tsv
+  --out ../submission.tsv
 ```
 
 It prints AUPRC (presence) and Spearman (efficiency) for the held-out contig.

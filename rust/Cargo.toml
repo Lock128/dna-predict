@@ -1,0 +1,24 @@
+[package]
+name = "epic"
+version = "0.1.0"
+edition = "2021"
+description = "Fast pipeline for the EPIC challenge: predicting transcription initiation from DNA sequence"
+license = "MIT"
+
+[[bin]]
+name = "epic"
+path = "src/main.rs"
+
+[lib]
+name = "epic"
+path = "src/lib.rs"
+
+[dependencies]
+clap = { version = "4", features = ["derive"] }
+flate2 = "1"
+rayon = "1"
+
+[profile.release]
+opt-level = 3
+lto = true
+codegen-units = 1

@@ -65,26 +65,48 @@ Results are aggregated by **log-ranks** (as in the IBIS challenge) to award **go
 
 ---
 
-## Repo layout (planned)
+## Implementation
+
+The pipeline is written in **Rust** (crate `epic`, in [`rust/`](./rust)) for speed
+and low memory on multi-GB genomes: streaming FASTA/bedGraph readers, the
+dinucleotide baseline, and the offline scoring replica, behind a single `epic`
+CLI. See [`rust/README.md`](./rust/README.md) for build and usage.
+
+Because the full dataset is too large for a laptop, we run the heavy work on
+AWS — see the action plan in [`docs/AWS.md`](./docs/AWS.md).
+
+## Repo layout
 
 ```
 dna-predict/
-├── README.md            # this file
-├── PROBLEM.md           # the biology + ML problem, explained
+├── README.md             # this file
+├── PROBLEM.md            # the biology + ML problem, explained
 ├── docs/
-│   └── CHALLENGE.md      # challenge logistics, data, scoring, rules
+│   ├── CHALLENGE.md       # challenge logistics, data, scoring, rules
+│   └── AWS.md             # action plan for running on AWS (big data)
+├── rust/                 # the epic crate: data, baseline, scoring, CLI
+│   ├── Cargo.toml
+│   └── src/{lib,data,baseline,scoring,main}.rs
 ├── data/                 # (gitignored) downloaded genomes & csRNA-seq tracks
-├── src/                  # data loading, models, training
-├── notebooks/            # exploration
 └── scoring/              # local replica of the official scoring (Nematostella)
 ```
 
 ## Getting started
 
 1. Register the team on the EPIC GitHub and read the full rules at [epic.autosome.org](https://epic.autosome.org).
-2. Download the data from [Zenodo](https://doi.org/10.5281/zenodo.22285753) into `data/` (kept out of git).
-3. Stand up the local scoring replica using the *Nematostella* dataset to validate the pipeline end-to-end.
-4. Start with the dinucleotide baseline, then iterate.
+2. Build the tool: `cargo build --release` in `rust/` (produces `rust/target/release/epic`).
+3. Download the data from [Zenodo](https://doi.org/10.5281/zenodo.22285753) into `data/` (kept out of git) — on AWS per [`docs/AWS.md`](./docs/AWS.md) if it's too big locally.
+4. Validate the pipeline end-to-end on the *Nematostella* replica, then run the dinucleotide baseline and iterate.
+
+```bash
+cd rust && cargo build --release
+./target/release/epic baseline \
+  --genome ../data/nematostella/genome.fa \
+  --plus   ../data/nematostella/initiation.plus.bedgraph \
+  --minus  ../data/nematostella/initiation.minus.bedgraph \
+  --test-contigs <held_out_contig> \
+  --out ../submission.tsv
+```
 
 ---
 

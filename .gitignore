@@ -10,25 +10,18 @@ data/
 *.fasta.gz
 *.2bit
 
-# Model artifacts
+# Submissions / model artifacts
+submissions/
 *.pt
 *.pth
 *.ckpt
-*.h5
 *.onnx
 checkpoints/
 runs/
-wandb/
 
-# Python
-__pycache__/
-*.py[cod]
-.venv/
-venv/
-env/
-.ipynb_checkpoints/
-*.egg-info/
-.pytest_cache/
+# Rust
+/rust/target/
+target/
 
 # OS / editor
 .DS_Store
