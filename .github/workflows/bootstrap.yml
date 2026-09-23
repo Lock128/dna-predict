@@ -2,9 +2,11 @@ name: CDK bootstrap
 
 # One-time (or occasional) CDK bootstrap of the target account/region.
 # Triggered manually from the Actions tab. Uses the same OIDC deploy role and
-# repo secrets as the deploy workflow.
+# secrets as the deploy workflow.
 #
-# Required repo secrets:
+# Required secrets — because this job runs in the `production` environment,
+# these must be visible to it: set them either as REPOSITORY secrets or as
+# secrets on the `production` ENVIRONMENT (Settings → Environments → production):
 #   AWS_REGION, AWS_ACCOUNT_ID, AWS_DEPLOY_ROLE_ARN
 #
 # The deploy role must be permitted to create the CDK bootstrap resources
@@ -44,6 +46,24 @@ jobs:
           node-version: "22"
           cache: npm
           cache-dependency-path: infra/package-lock.json
+
+      - name: Check required secrets
+        env:
+          AWS_ACCOUNT_ID: ${{ secrets.AWS_ACCOUNT_ID }}
+          AWS_REGION: ${{ secrets.AWS_REGION }}
+          AWS_DEPLOY_ROLE_ARN: ${{ secrets.AWS_DEPLOY_ROLE_ARN }}
+        run: |
+          missing=0
+          for v in AWS_ACCOUNT_ID AWS_DEPLOY_ROLE_ARN; do
+            if [ -z "${!v}" ]; then echo "::error::secret $v is empty or not set"; missing=1; fi
+          done
+          if [ -z "${AWS_REGION}" ] && [ -z "${{ inputs.region }}" ]; then
+            echo "::error::AWS_REGION secret is empty and no region input given"; missing=1
+          fi
+          if [ "$missing" = "1" ]; then
+            echo "::error::Set these as secrets on the 'production' environment (or repository). See infra/README.md."
+            exit 1
+          fi
 
       - name: Resolve region
         id: region
