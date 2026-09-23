@@ -64,7 +64,11 @@ export class BatchCompute extends Construct {
     // No addIngressRule calls -> the SG has zero inbound rules.
 
     // --- Fargate ARM64 (Graviton) compute environment -----------------------
-    const computeEnv = new batch.FargateComputeEnvironment(this, "FargateArm", {
+    // Logical id "FargateArmV2" (not "FargateArm"): a Batch Fargate compute
+    // environment's networking (subnets/VPC) can't be updated in place, so
+    // moving it to the new VpcV2 requires replacing it. A new logical id makes
+    // CloudFormation create the new CE, repoint the queue, and drop the old one.
+    const computeEnv = new batch.FargateComputeEnvironment(this, "FargateArmV2", {
       vpc: props.vpc,
       spot: true, // cheaper; the baseline is restartable
       // Public subnets + public IP so tasks reach the internet without a NAT.
