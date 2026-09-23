@@ -11,6 +11,8 @@ import { Storage } from "./storage";
 import { BatchCompute } from "./batch-compute";
 import { Ingestion } from "./ingestion";
 import { JobLauncher } from "./job-launcher";
+import { Execute } from "./execute";
+import { Baseline } from "./baseline";
 
 export interface AppStackProps extends StackProps {
   readonly config: EpicConfig;
@@ -75,6 +77,23 @@ export class AppStack extends Stack {
       dataBucket: storage.dataBucket,
     });
 
+    // Inner, reusable worker: run one epic job, score, verify, record.
+    const execute = new Execute(this, "Execute", {
+      prefix: config.prefix,
+      dataBucket: storage.dataBucket,
+      jobQueue: compute.jobQueue,
+      epicJobDefinition: compute.epicJobDefinition,
+      resultsTable: storage.resultsTable,
+    });
+
+    // Outer, triggered machine: turn a species into run(s) and fan out to the
+    // execute machine. This is the "just start a Step Function" entry point.
+    const baseline = new Baseline(this, "Baseline", {
+      prefix: config.prefix,
+      dataBucket: storage.dataBucket,
+      executeStateMachine: execute.stateMachine,
+    });
+
     // --- handy outputs ------------------------------------------------------
     new CfnOutput(this, "DataBucketName", { value: storage.dataBucket.bucketName });
     new CfnOutput(this, "JobQueueArn", { value: compute.jobQueue.jobQueueArn });
@@ -88,5 +107,14 @@ export class AppStack extends Stack {
       value: launcher.function.functionName,
     });
     new CfnOutput(this, "ImageUri", { value: compute.image.imageUri });
+    new CfnOutput(this, "BaselineStateMachineArn", {
+      value: baseline.stateMachine.stateMachineArn,
+    });
+    new CfnOutput(this, "ExecuteStateMachineArn", {
+      value: execute.stateMachine.stateMachineArn,
+    });
+    new CfnOutput(this, "ResultsTableName", {
+      value: storage.resultsTable.tableName,
+    });
   }
 }

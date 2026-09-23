@@ -56,6 +56,7 @@ inp = cfg["inputPrefix"].rstrip("/")
 data = "/data"
 def p(name): return f"{data}/{cfg[name]}"
 cmd = ["baseline",
+       "--species", species,
        "--genome", p("genome"),
        "--plus", p("plus"),
        "--minus", p("minus")]

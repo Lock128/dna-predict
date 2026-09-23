@@ -217,6 +217,22 @@ flowchart TB
         launcher["λ launch-epic-job"]
         queue["Batch job queue"]
 
+        subgraph BASE["Step Functions — baseline (trigger)"]
+            build["λ BuildBaselineCommand"]
+            fanout["Map: per run"]
+            build --> fanout
+        end
+
+        subgraph EXEC["Step Functions — execute (reusable worker)"]
+            runjob["Batch: epic job (.sync)"]
+            readsc["λ ReadScores"]
+            verifyrun["λ VerifyRun"]
+            record["DynamoDB PutItem"]
+            runjob --> readsc --> verifyrun --> record
+        end
+
+        results[("DynamoDB results<br/>PK species · SK runId<br/>GSIs: byModel/byStatus/byDate")]
+
         subgraph VPC["VPC · no NAT gateway"]
             subgraph PUB["Public subnets · 2 AZs · egress-only SG"]
                 epicjob["Batch: epic job<br/>Fargate arm64 / Spot"]
@@ -234,6 +250,10 @@ flowchart TB
 
     launcher -->|SubmitJob| queue
     run -.->|SubmitJob| queue
+    fanout -->|StartExecution.sync| EXEC
+    runjob -->|SubmitJob| queue
+    readsc -->|read scores.json| s3ep
+    record -->|PutItem| results
     queue --> epicjob
     queue --> dljob
 
@@ -258,9 +278,9 @@ flowchart TB
     classDef external fill:#555,stroke:#222,color:#fff;
     classDef cicd fill:#24292E,stroke:#000,color:#fff;
 
-    class epicjob,dljob,queue compute;
-    class prep,verify,launcher,run serverless;
-    class s3 storage;
+    class epicjob,dljob,queue,runjob compute;
+    class prep,verify,launcher,run,build,fanout,readsc,verifyrun,record serverless;
+    class s3,results storage;
     class s3ep,VPC,PUB network;
     class ecr registry;
     class logs observability;
@@ -312,7 +332,8 @@ sequenceDiagram
 | — | **Bootstrap** the account/region (one-time) | Before the first deploy | `scripts/bootstrap.sh` / `npm run aws:bootstrap`, or the **CDK bootstrap** workflow |
 | 1 | **Deploy / update** infra + image | On every push to `main`; or manually | automatic via GitHub Actions; or `scripts/deploy.sh` / `npm run aws:deploy` |
 | 2 | **Ingest** the Zenodo dataset into S3 | Once per dataset (or when it changes) | `scripts/ingest.sh [record]` / `npm run aws:ingest` — starts the Step Functions state machine |
-| 3 | **Run** an `epic` job (baseline / predict / score) | Whenever you want a run | `scripts/run-epic.sh -- <epic args>` / `npm run aws:run` — invokes the launcher Lambda |
+| 3 | **Run the baseline** (reproducible, recorded) | Whenever you want a scored run | `scripts/run-baseline.sh --species NAME` / `npm run aws:baseline` — starts the `epic-baseline` state machine (or the **console**, see below) |
+| 3b | **Run** an ad hoc `epic` job | One-off command / debugging | `scripts/run-epic.sh -- <epic args>` / `npm run aws:run` — invokes the launcher Lambda (not recorded) |
 | — | **Watch** job logs | While a job runs | `scripts/logs.sh` / `npm run aws:logs` |
 | — | **List** stack outputs | Anytime | `scripts/outputs.sh` / `npm run aws:outputs` |
 | 4 | **Destroy** the stack | When idle, to guarantee $0 | `scripts/destroy.sh` / `npm run aws:destroy`, or the **Destroy** workflow (manual) |
@@ -329,6 +350,67 @@ S3 (via a Batch download job), and the launcher Lambda submits `epic` jobs to
 the queue. Batch tasks run on Fargate ARM64 in **public subnets with public IPs
 but an egress-only security group** (no inbound), and reach S3 through a free
 gateway endpoint — so there is **no NAT gateway** and effectively no idle cost.
+
+## Running the baseline from the AWS Console
+
+You don't need the CLI or the wrapper scripts — the baseline is a Step Functions
+state machine, so you can trigger it from the console with a small JSON input.
+The scripts just resolve the ARN for you; the console does the same thing with a
+form.
+
+**Prerequisite:** the stack is deployed (`npm run aws:deploy` or a push to
+`main`) and the data is in S3 (`scripts/ingest.sh`, or the ingestion state
+machine — see below). Console triggering only works once these resources exist.
+
+### Trigger a run
+
+1. Sign in to the AWS Console and select your region (**eu-central-1** by
+   default — top-right region picker).
+2. Go to **Step Functions** → **State machines**.
+3. Open **`epic-baseline`** (the outer machine — the one you trigger).
+4. Click **Start execution**.
+5. In **Input**, paste one of:
+   - `{ "species": "nematostella" }` — a single species
+   - `{ "species": "oyster", "k": 3 }` — override the k-mer size
+   - `{ "species": "all" }` — fan out over every configured species in parallel
+   
+   (`species` must match a `config/<species>.json`; `k` is optional, default 2.)
+6. Click **Start execution**.
+
+The graph view opens. The `Map` state fans out to one child **`epic-execute`**
+execution per species; each child runs the Batch job (`.sync`), reads the run's
+`scores.json` from S3, verifies it, and writes a row to DynamoDB. Click a `Map`
+iteration (or find the child in the `epic-execute` machine's **Executions** tab)
+to drill into a single run.
+
+### See the results
+
+- **Scores + verification (DynamoDB):** **DynamoDB** → **Tables** →
+  **`epic-results`** → **Explore table items**. Query by the partition key
+  `species` (e.g. `nematostella`) to get that species' runs; each item has
+  `auprc`, `spearman`, `verificationStatus`, `verificationDetail`,
+  `submissionKey`, `finishedAt`, and more. The **byStatus** index (query
+  `verificationStatus = FAILED`) is a quick way to find bad runs; **byModel**
+  and **byDate** are there for "all runs of a model" and the global timeline.
+- **The submission file (S3):** **S3** → the data bucket (output
+  `DataBucketName`) → `submissions/<species>/` → `*.baseline.tsv` and
+  `scores.json`.
+- **Job logs:** **CloudWatch** → **Log groups** → **`/aws/batch/epic`** (or use
+  `scripts/logs.sh`).
+
+### Ingesting data from the console
+
+Same idea for loading the data: **Step Functions** → **`epic-ingestion`** →
+**Start execution** with `{ "record": "22285753" }`. It downloads the Zenodo
+record into `s3://<bucket>/raw/<record>/` via a Batch job and verifies it landed.
+
+### Finding the ARNs / names
+
+Everything above is named with the `epic-` prefix. If you need exact ARNs
+(e.g. for EventBridge or an API trigger later), they're **CloudFormation stack
+outputs**: **CloudFormation** → **`epic-app`** → **Outputs** →
+`BaselineStateMachineArn`, `ExecuteStateMachineArn`, `ResultsTableName`,
+`DataBucketName` (or run `npm run aws:outputs`).
 
 ## Solving the EPIC challenge on this infrastructure
 
@@ -386,15 +468,32 @@ Run this once per species (octopus, oyster, moth, milkweed bug, dogfish). Each
 run is an independent Fargate job — submit them together and they run in
 parallel on the queue. Watch progress with `scripts/logs.sh`.
 
-The container handles data movement itself: when the launcher sets an input
-prefix, the entrypoint syncs `s3://<bucket>/<inputPrefix>` → `/data`, runs
-`epic`, then syncs `/data/out` → `s3://<bucket>/submissions/<species>`. So the
-simplest invocation is **config-driven** — the split and paths come from
-`config/<species>.json`:
+The container handles data movement itself: when the input prefix is set, the
+entrypoint syncs `s3://<bucket>/<inputPrefix>` → `/data`, runs `epic`, then syncs
+`/data/out` → `s3://<bucket>/submissions/<species>`.
+
+The **reproducible** way to run this is the baseline Step Functions machine —
+you give it a species and it builds the command from `config/<species>.json`,
+runs the job, and records the result:
 
 ```bash
-scripts/run-epic.sh --species oyster        # reads config/oyster.json
-scripts/run-epic.sh --species oyster --k 3  # same, sweep k-mer size
+scripts/run-baseline.sh --species oyster        # from config/oyster.json
+scripts/run-baseline.sh --species oyster --k 3  # sweep k-mer size
+scripts/run-baseline.sh --species all           # every configured species
+```
+
+Each run writes a `scores.json` next to its submission; the machine reads it,
+verifies the submission, and records one row per run to the **ResultsTable** in
+DynamoDB (keyed by species, with `byModel`/`byStatus`/`byDate` GSIs) so you can
+query scores and verification outcomes later. The outer machine delegates to a
+reusable inner **execute** machine, so future launchers (CNN, pretrained models)
+reuse the same run/score/verify/record worker.
+
+For a one-off command (no recording), the ad hoc launcher path still works:
+
+```bash
+scripts/run-epic.sh --species oyster        # single Batch job via launcher Lambda
+scripts/run-epic.sh -- baseline --help      # pass-through command
 ```
 
 ### Step 3 — Score and compare to the baseline
@@ -446,6 +545,13 @@ Done:
 - **Per-species config** — [`config/<species>.json`](../config) holds the S3
   input prefix, file names, and train/test contig split; `scripts/run-epic.sh
   --species NAME` builds the whole command from it.
+- **Reproducible baseline runs + result recording** — the baseline Step
+  Functions machine ([`infra/lib/baseline.ts`](../infra/lib/baseline.ts)) turns a
+  species into run(s) and fans out to the reusable execute machine
+  ([`infra/lib/execute.ts`](../infra/lib/execute.ts)), which runs the job, reads
+  the run's `scores.json`, verifies it, and records scores + verification to a
+  DynamoDB results table. `epic baseline` writes that `scores.json` next to its
+  submission.
 
 Still to do (needs the real dataset):
 

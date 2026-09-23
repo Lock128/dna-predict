@@ -9,6 +9,7 @@
     "aws:destroy": "scripts/destroy.sh",
     "aws:ingest": "scripts/ingest.sh",
     "aws:run": "scripts/run-epic.sh",
+    "aws:baseline": "scripts/run-baseline.sh",
     "aws:logs": "scripts/logs.sh",
     "aws:outputs": "scripts/outputs.sh",
     "check:diagrams": "scripts/check-diagrams.sh",

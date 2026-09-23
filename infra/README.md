@@ -23,14 +23,22 @@ AppStack (epic-app)
 │   └── EcsJobDefinition "epic-download" — streams Zenodo files to S3 (public IP)
 ├── Ingestion — Step Functions state machine:
 │       PrepareDownload (Lambda) → RunDownloadJob (Batch .sync) → VerifyDownload (Lambda)
-└── Launcher — Lambda that submits epic Batch jobs on demand
+├── Launcher — Lambda that submits epic Batch jobs on demand
+├── ResultsTable — DynamoDB (PK species, SK runId) — one queryable row per run
+│       + GSIs: byModel, byStatus, byDate  (on-demand billing, RETAINed)
+├── Execute — inner, reusable Step Functions state machine (one run):
+│       RunJob (Batch .sync) → ReadScores (Lambda) → Verify (Lambda) → RecordResult (DynamoDB)
+│       (a job failure is caught and still recorded as FAILED)
+└── Baseline — outer Step Functions state machine (the trigger):
+        BuildBaselineCommand (Lambda) → Map → StartExecution.sync(Execute)
 ```
 
 CI/CD (GitHub Actions) assumes an **existing** AWS IAM role via OIDC; the role
 and GitHub↔AWS OIDC connection are managed outside this stack.
 
 Key stack outputs: `DataBucketName`, `JobQueueArn`, `EpicJobDefinitionArn`,
-`IngestionStateMachineArn`, `LaunchJobFunctionName`, `ImageUri`.
+`IngestionStateMachineArn`, `LaunchJobFunctionName`, `ImageUri`,
+`BaselineStateMachineArn`, `ExecuteStateMachineArn`, `ResultsTableName`.
 
 ## How the application works
 
@@ -62,11 +70,55 @@ Zenodo record id. Three steps:
 
 ### Running the pipeline
 
-The **launcher Lambda** (`launch-epic-job`) submits an `epic` job to the Batch
-**queue** with a container command (e.g. `baseline --genome … --out …`). Batch
-places it on the Fargate **compute environment**; the task pulls the image from
-ECR, reads inputs and writes submissions to S3 through the **S3 gateway
-endpoint**, and logs to CloudWatch. You can also `aws batch submit-job` directly.
+There are two ways to run:
+
+**Reproducible (recommended) — the baseline state machine.** Start the
+**Baseline** Step Functions machine with just a species and it does the rest:
+
+```bash
+scripts/run-baseline.sh --species nematostella   # or: --species all, --k 3, --wait
+```
+
+The outer machine builds the exact `epic baseline` command from the bundled
+`config/<species>.json` (a `BuildBaselineCommand` Lambda), then fans out — one
+child execution per run — to the reusable **Execute** machine. Execute runs the
+Batch job (`.sync`), reads the `scores.json` the run wrote to S3, verifies the
+submission landed and the metrics are sane, and writes one row per run to the
+**ResultsTable** in DynamoDB. A failed job is caught and still recorded (status
+`FAILED`), so every attempt is queryable. Because the species configs are
+bundled into the Lambda artifact, a run is reproducible from the deployment
+alone — no laptop state, no hand-built command.
+
+You can also trigger this from the **AWS console** — Step Functions →
+`epic-baseline` → *Start execution* with `{ "species": "nematostella" }` — with
+no CLI at all. Step-by-step (including where to read the results in DynamoDB /
+S3 / CloudWatch) is in
+[docs/AWS.md → Running the baseline from the AWS Console](../docs/AWS.md#running-the-baseline-from-the-aws-console).
+
+**Ad hoc — the launcher Lambda.** The **launcher Lambda** (`launch-epic-job`)
+submits a single `epic` job to the Batch **queue** with a container command
+(e.g. `baseline --genome … --out …`). Batch places it on the Fargate **compute
+environment**; the task pulls the image from ECR, reads inputs and writes
+submissions to S3 through the **S3 gateway endpoint**, and logs to CloudWatch.
+You can also `aws batch submit-job` directly. This path does not record to
+DynamoDB — use it for one-off commands and debugging.
+
+### Querying results
+
+Each run is one item keyed by `species` (PK) + `runId` (SK, a sortable
+`<finishedAt>#<executionName>`), with `auprc`, `spearman`, `verificationStatus`,
+`submissionKey`, and more. GSIs cover the common questions:
+
+- **byModel** (`model` + `finishedAt`) — every run of a model over time.
+- **byStatus** (`verificationStatus` + `finishedAt`) — triage failures/passes.
+- **byDate** (`recordType` + `finishedAt`) — the global timeline across species.
+
+```bash
+TABLE="$(scripts/outputs.sh | awk '/ResultsTableName/{print $NF}')"
+aws dynamodb query --table-name "$TABLE" \
+  --key-condition-expression 'species = :s' \
+  --expression-attribute-values '{":s":{"S":"nematostella"}}'
+```
 
 ### Networking & security
 
@@ -151,10 +203,11 @@ for you. See [`scripts/README.md`](../scripts/README.md) and the
 [invocation section in `docs/AWS.md`](../docs/AWS.md#when--how-each-part-is-invoked).
 
 ```bash
-scripts/ingest.sh --wait               # Zenodo -> S3 (Step Functions)
-scripts/run-epic.sh --species oyster   # config-driven: syncs S3, runs, uploads
-scripts/logs.sh                        # tail job logs
-scripts/destroy.sh                     # tear down (S3 retained)
+scripts/ingest.sh --wait                    # Zenodo -> S3 (Step Functions)
+scripts/run-baseline.sh --species oyster    # reproducible run -> scores + DynamoDB
+scripts/run-epic.sh --species oyster        # ad hoc single Batch job (no recording)
+scripts/logs.sh                             # tail job logs
+scripts/destroy.sh                          # tear down (S3 + results table retained)
 ```
 
 `run-epic.sh --species NAME` reads `config/NAME.json` (S3 input prefix + contig
@@ -170,7 +223,12 @@ aws stepfunctions start-execution \
   --state-machine-arn <IngestionStateMachineArn> \
   --input '{"record":"22285753"}'
 
-# 2. Launch an epic job via the launcher Lambda (LaunchJobFunctionName output)
+# 2a. Reproducible baseline: start the baseline state machine (BaselineStateMachineArn)
+aws stepfunctions start-execution \
+  --state-machine-arn <BaselineStateMachineArn> \
+  --input '{"species":"nematostella"}'      # or {"species":"all"} / {"species":"oyster","k":3}
+
+# 2b. Or launch a one-off epic job via the launcher Lambda (LaunchJobFunctionName output)
 aws lambda invoke \
   --function-name <LaunchJobFunctionName> \
   --payload '{"species":"nematostella","command":["baseline","--help"]}' \
@@ -231,6 +289,12 @@ npx cdk destroy     # tear down (the S3 bucket is RETAINed — delete manually)
   to `/data`, runs `epic`, and uploads `/data/out` to `submissions/<species>`.
   The launcher Lambda sets the sync env vars from the `inputPrefix`/`species`
   it's given.
+- **Reproducible runs + result recording (done):** the **Baseline** state
+  machine turns a species into a run and delegates to the reusable **Execute**
+  machine, which runs the job, reads the run's `scores.json` from S3, verifies
+  it, and records the scores + verification outcome to the **ResultsTable**
+  (DynamoDB). The `epic baseline` binary writes that `scores.json` next to its
+  submission (Option A — structured results instead of log-scraping).
 - **Contig splits (done, placeholders):** `config/<species>.json` holds each
   species' S3 prefix, file names, and train/test split. Update the placeholder
   contig/file names once the real Zenodo layout is confirmed.
