@@ -170,15 +170,88 @@ deployable via CI/CD — see [`infra/README.md`](../infra/README.md). It provisi
 
 - the **S3 data bucket** (the hub from step 1),
 - the **container image** (built from the repo `Dockerfile`, ARM64, pushed to ECR),
-- an **AWS Batch** Graviton/Fargate compute environment + queue + job definitions,
+- an **AWS Batch** Graviton/Fargate (Spot) compute environment + queue + job
+  definitions, running in **public subnets with an egress-only security group**
+  and a **free S3 gateway endpoint** — deliberately **no NAT gateway**, so idle
+  cost is ~$0,
 - a **Step Functions + Lambda** ingestion workflow that downloads the Zenodo
   dataset into S3 automatically (a Batch download job does the heavy transfer),
 - a **launcher Lambda** to trigger `epic` container runs on Batch, and
 - a **GitHub Actions** CI/CD workflow that deploys on push to `main` via an
   OIDC deploy role (no stored AWS keys).
 
+**Idle cost:** because there is no NAT gateway and Batch/Lambda/Step Functions
+are all pay-per-use, a deployed-but-unused stack costs essentially nothing — you
+pay only for S3 storage (empty until ingestion runs), the ECR image (a few
+cents), and any logs. Compute is billed only while a Batch job actually runs.
+
 Once deployed: start the ingestion state machine to load the data, then invoke
 the launcher (or `aws batch submit-job`) to run the pipeline.
+
+### Architecture
+
+```mermaid
+flowchart TB
+    subgraph GH["GitHub"]
+        repo["Repo: Lock128/dna-predict"]
+        gha["GitHub Actions<br/>(deploy on push to main)"]
+        repo --> gha
+    end
+
+    subgraph AWS["AWS account (eu-central-1)"]
+        ecr["ECR<br/>epic container image<br/>(linux/arm64)"]
+
+        subgraph VPC["VPC — no NAT gateway"]
+            subgraph PUB["Public subnets (2 AZs)"]
+                epicjob["Batch job: epic<br/>Fargate ARM64 / Spot<br/>public IP, egress-only SG"]
+                dljob["Batch job: download<br/>Fargate ARM64<br/>public IP, egress-only SG"]
+            end
+            s3ep["S3 gateway endpoint<br/>(free)"]
+        end
+
+        queue["Batch job queue"]
+        s3[("S3 data bucket<br/>raw/ processed/<br/>submissions/ models/")]
+
+        subgraph SFN["Step Functions: ingestion"]
+            prep["Lambda<br/>PrepareDownload"]
+            run["Batch download job<br/>(.sync)"]
+            verify["Lambda<br/>VerifyDownload"]
+            prep --> run --> verify
+        end
+
+        launcher["Lambda<br/>launch-epic-job"]
+        logs["CloudWatch Logs"]
+    end
+
+    zenodo["Zenodo<br/>doi:10.5281/zenodo.22285753"]
+
+    gha -->|OIDC assume role| AWS
+    gha -->|cdk deploy: build + push| ecr
+
+    queue --> epicjob
+    queue --> dljob
+    launcher -->|SubmitJob| queue
+    run -.->|SubmitJob| queue
+
+    ecr -.->|pull image| epicjob
+    ecr -.->|pull image| dljob
+
+    dljob -->|download| zenodo
+    dljob -->|write raw/| s3ep --> s3
+    epicjob <-->|read data / write submissions| s3ep
+
+    epicjob --> logs
+    dljob --> logs
+    SFN --> logs
+```
+
+**Reading the diagram:** CI/CD (GitHub Actions) assumes an existing role via
+OIDC and runs `cdk deploy`, which builds the ARM64 image and pushes it to ECR.
+At runtime the ingestion state machine downloads the Zenodo dataset into S3 (via
+a Batch download job), and the launcher Lambda submits `epic` jobs to the queue.
+Batch tasks run on Fargate ARM64 in **public subnets with public IPs but an
+egress-only security group** (no inbound), and reach S3 through a free gateway
+endpoint — so there is **no NAT gateway** and effectively no idle cost.
 
 ## Summary / decision
 

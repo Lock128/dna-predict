@@ -6,18 +6,21 @@ compute stack, an automated Zenodo → S3 data-ingestion workflow, and a launche
 to trigger container runs. It can be deployed locally or via GitHub Actions
 (OIDC) on push to `main`.
 
+See the [architecture diagram](../docs/AWS.md#architecture) for the big picture.
+
 ## What gets created
 
 ```
 AppStack (epic-app)
-├── VPC (2 AZs, 1 NAT) — Fargate tasks run in private subnets
+├── VPC (2 AZs) — NO NAT gateway; public subnets + free S3 gateway endpoint
 ├── S3 DataBucket — raw/ processed/ submissions/ models/ (versioned, RETAINed)
 ├── Batch
 │   ├── DockerImageAsset — builds ../Dockerfile for linux/arm64, pushes to ECR
-│   ├── Fargate ARM64 (Graviton) compute environment (Spot)
+│   ├── SecurityGroup — egress-only, ZERO ingress rules
+│   ├── Fargate ARM64 (Graviton) compute environment (Spot), in public subnets
 │   ├── JobQueue
-│   ├── EcsJobDefinition "epic-epic"     — runs the pipeline binary
-│   └── EcsJobDefinition "epic-download" — streams Zenodo files to S3 (aws-cli)
+│   ├── EcsJobDefinition "epic-epic"     — runs the pipeline binary (public IP)
+│   └── EcsJobDefinition "epic-download" — streams Zenodo files to S3 (public IP)
 ├── Ingestion — Step Functions state machine:
 │       PrepareDownload (Lambda) → RunDownloadJob (Batch .sync) → VerifyDownload (Lambda)
 └── Launcher — Lambda that submits epic Batch jobs on demand
@@ -28,6 +31,51 @@ and GitHub↔AWS OIDC connection are managed outside this stack.
 
 Key stack outputs: `DataBucketName`, `JobQueueArn`, `EpicJobDefinitionArn`,
 `IngestionStateMachineArn`, `LaunchJobFunctionName`, `ImageUri`.
+
+## How the application works
+
+The infrastructure exists to do two things: **get the data into S3**, and **run
+the `epic` container against it**. Here's the end-to-end flow.
+
+### Build & deploy (CI/CD)
+
+1. A push to `main` triggers the GitHub Actions **deploy** workflow.
+2. It authenticates to AWS via **OIDC** (assumes an existing role — no stored
+   keys) and runs `cdk deploy` on an **ARM runner**.
+3. CDK builds the `epic` image from the repo `Dockerfile` **natively for
+   linux/arm64** and pushes it to the CDK assets **ECR** repo, then creates/updates
+   the CloudFormation stack.
+
+### Data ingestion (Zenodo → S3)
+
+Triggered by starting the **ingestion Step Functions** state machine with a
+Zenodo record id. Three steps:
+
+1. **PrepareDownload** (Lambda) — calls the Zenodo API for the record and builds
+   a shell script that streams each file into `s3://<bucket>/raw/<record>/`
+   (`curl … | aws s3 cp -`).
+2. **RunDownloadJob** (Batch, `.sync`) — runs that script on a Fargate task. The
+   heavy multi-GB transfer runs here, not in Lambda, to avoid the 15-minute and
+   ephemeral-storage limits. The task has 200 GB scratch as a fallback.
+3. **VerifyDownload** (Lambda) — lists the S3 prefix and fails the run if no
+   objects/bytes landed.
+
+### Running the pipeline
+
+The **launcher Lambda** (`launch-epic-job`) submits an `epic` job to the Batch
+**queue** with a container command (e.g. `baseline --genome … --out …`). Batch
+places it on the Fargate **compute environment**; the task pulls the image from
+ECR, reads inputs and writes submissions to S3 through the **S3 gateway
+endpoint**, and logs to CloudWatch. You can also `aws batch submit-job` directly.
+
+### Networking & security
+
+To avoid the only 24/7 cost (a NAT gateway), tasks run in **public subnets with
+public IPs** (`assignPublicIp: ENABLED`, required for image pulls without NAT).
+They're locked down at the network layer by a **dedicated security group that
+allows all egress but has zero ingress rules** — nothing is reachable from the
+internet despite the public IP. S3 traffic uses a **free gateway endpoint**
+instead of the internet. Net idle cost: ~$0.
 
 ## Prerequisites
 
@@ -152,5 +200,7 @@ npx cdk destroy     # tear down (the S3 bucket is RETAINed — delete manually)
   per file from the Zenodo API. Confirm large files stream acceptably; if not,
   switch to download-to-scratch-then-upload (the download job already has 200 GB
   ephemeral storage).
-- **Cost:** Fargate Spot + on-demand ingestion; the bucket is versioned with a
-  raw/→IA lifecycle rule. Tear down compute when idle.
+- **Cost:** no NAT gateway and everything else is pay-per-use, so a
+  deployed-but-idle stack costs ~$0 (only S3 storage + the ECR image + logs).
+  Fargate is billed only while a job runs; the bucket is versioned with a
+  raw/→IA lifecycle rule.

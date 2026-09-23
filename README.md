@@ -75,7 +75,11 @@ dinucleotide baseline, and the offline scoring replica, behind a single `epic`
 CLI. See [`rust/README.md`](./rust/README.md) for build and usage.
 
 Because the full dataset is too large for a laptop, we run the heavy work on
-AWS — see the action plan in [`docs/AWS.md`](./docs/AWS.md).
+AWS. The infrastructure (S3, AWS Batch on Graviton, a Zenodo→S3 ingestion
+workflow, and GitHub Actions CI/CD) is a CDK app in [`infra/`](./infra); see the
+action plan and [**architecture diagram**](./docs/AWS.md#architecture) in
+[`docs/AWS.md`](./docs/AWS.md), and [`infra/README.md`](./infra/README.md) for
+how the deployed application works.
 
 ## Repo layout
 
