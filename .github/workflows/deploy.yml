@@ -50,7 +50,9 @@ jobs:
 
   deploy:
     name: Deploy to AWS
-    runs-on: ubuntu-latest
+    # ARM runner: builds the linux/arm64 (Graviton) epic image natively — no
+    # QEMU emulation. Free-tier eligible, same per-minute rate as x86.
+    runs-on: ubuntu-24.04-arm
     # Only from main, never on PRs from forks.
     if: github.event_name == 'push' && github.ref == 'refs/heads/main'
     needs: validate
@@ -69,16 +71,6 @@ jobs:
           node-version: "24"
           cache: npm
           cache-dependency-path: infra/package-lock.json
-
-      # The epic image is built for linux/arm64 (Graviton). The runner is
-      # x86_64, so register QEMU to emulate arm64 during the Docker build.
-      - name: Set up QEMU (multi-arch emulation)
-        uses: docker/setup-qemu-action@v3
-        with:
-          platforms: arm64
-
-      - name: Set up Docker Buildx
-        uses: docker/setup-buildx-action@v3
 
       - name: Configure AWS credentials (OIDC)
         uses: aws-actions/configure-aws-credentials@v4
