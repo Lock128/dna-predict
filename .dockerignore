@@ -1,4 +1,4 @@
-# Keep the Docker build context small: only rust/ sources are needed.
+# Keep the Docker build context small: only rust/ + build/certs are needed.
 .git
 data
 dist
@@ -8,5 +8,9 @@ notebooks
 *.md
 **/target
 rust/target
+# CDK app + its synth output must never enter the image build context
+# (cdk.out staging the repo root would recurse infinitely).
+infra
+**/cdk.out
 .venv
 .DS_Store
