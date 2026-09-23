@@ -25,7 +25,12 @@ export class AppStack extends Stack {
     // run in PUBLIC subnets with a public IP so they can pull the image and
     // reach Zenodo directly; S3 traffic goes through a free gateway endpoint.
     // Ingress is blocked at the security-group level (see BatchCompute).
-    const vpc = new ec2.Vpc(this, "Vpc", {
+    // Logical id is "VpcV2" (not "Vpc") on purpose: switching from the original
+    // NAT-based layout to this NAT-free public-subnet layout can't be done as an
+    // in-place subnet re-CIDR (CloudFormation tries to create new subnets whose
+    // CIDRs collide with the old ones in the same VPC). A new logical id creates
+    // a fresh VPC and retires the old one cleanly.
+    const vpc = new ec2.Vpc(this, "VpcV2", {
       maxAzs: 2,
       natGateways: 0,
       subnetConfiguration: [
