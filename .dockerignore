@@ -1,0 +1,12 @@
+# Keep the Docker build context small: only rust/ sources are needed.
+.git
+data
+dist
+docs
+scoring
+notebooks
+*.md
+**/target
+rust/target
+.venv
+.DS_Store

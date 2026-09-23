@@ -23,6 +23,9 @@ runs/
 /rust/target/
 target/
 
+# Build artifacts
+dist/
+
 # OS / editor
 .DS_Store
 .idea/
