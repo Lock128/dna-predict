@@ -1,0 +1,65 @@
+name: CDK bootstrap
+
+# One-time (or occasional) CDK bootstrap of the target account/region.
+# Triggered manually from the Actions tab. Uses the same OIDC deploy role and
+# repo secrets as the deploy workflow.
+#
+# Required repo secrets:
+#   AWS_REGION, AWS_ACCOUNT_ID, AWS_DEPLOY_ROLE_ARN
+#
+# The deploy role must be permitted to create the CDK bootstrap resources
+# (CloudFormation "CDKToolkit" stack, the cdk-* roles, the assets bucket/ECR).
+
+on:
+  workflow_dispatch:
+    inputs:
+      region:
+        description: "AWS region to bootstrap (defaults to the AWS_REGION secret)"
+        required: false
+        type: string
+
+permissions:
+  contents: read
+
+concurrency:
+  group: bootstrap-${{ github.ref }}
+  cancel-in-progress: false
+
+jobs:
+  bootstrap:
+    name: cdk bootstrap
+    runs-on: ubuntu-latest
+    environment: production
+    permissions:
+      contents: read
+      id-token: write # required for OIDC
+    defaults:
+      run:
+        working-directory: infra
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-node@v4
+        with:
+          node-version: "22"
+          cache: npm
+          cache-dependency-path: infra/package-lock.json
+
+      - name: Resolve region
+        id: region
+        run: echo "value=${{ inputs.region != '' && inputs.region || secrets.AWS_REGION }}" >> "$GITHUB_OUTPUT"
+
+      - name: Configure AWS credentials (OIDC)
+        uses: aws-actions/configure-aws-credentials@v4
+        with:
+          role-to-assume: ${{ secrets.AWS_DEPLOY_ROLE_ARN }}
+          aws-region: ${{ steps.region.outputs.value }}
+          role-session-name: gha-dna-predict-bootstrap
+
+      - run: npm ci
+
+      - name: CDK bootstrap
+        run: npx cdk bootstrap "aws://${{ secrets.AWS_ACCOUNT_ID }}/${{ steps.region.outputs.value }}"
+        env:
+          CDK_DEPLOY_ACCOUNT: ${{ secrets.AWS_ACCOUNT_ID }}
+          CDK_DEPLOY_REGION: ${{ steps.region.outputs.value }}

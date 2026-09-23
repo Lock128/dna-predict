@@ -65,6 +65,11 @@ export CDK_DEPLOY_ACCOUNT=<account> CDK_DEPLOY_REGION=eu-central-1
 npx cdk deploy        # builds the image, creates all resources
 ```
 
+> Prefer to bootstrap from CI? Run the **CDK bootstrap** workflow
+> ([`.github/workflows/bootstrap.yml`](../.github/workflows/bootstrap.yml))
+> manually from the Actions tab — it bootstraps the target account/region using
+> the same OIDC role and secrets.
+
 ## Deploy — CI/CD via GitHub Actions
 
 CI/CD is a GitHub Actions workflow ([`.github/workflows/deploy.yml`](../.github/workflows/deploy.yml)):
