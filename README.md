@@ -6,6 +6,8 @@ Our team's working repository for the **EPIC** challenge — the **E**ukaryotic 
 
 EPIC is an open, blind community benchmark for sequence-to-function models, run by the [Duttke lab](https://autosome.org) and hosted at **[epic.autosome.org](https://epic.autosome.org)**. This repo is where we build and track our submission.
 
+> ⚠️ **Usage notice:** This code is **not** free to use. It may not be used, copied, or redistributed without prior permission from the author, and it is **not licensed for commercial use** under any circumstances. See [Usage & licensing](#usage--licensing) below.
+
 ---
 
 ## The one-paragraph version
@@ -80,6 +82,7 @@ AWS — see the action plan in [`docs/AWS.md`](./docs/AWS.md).
 ```
 dna-predict/
 ├── README.md             # this file
+├── LICENSE               # proprietary license (all rights reserved, no commercial use)
 ├── PROBLEM.md            # the biology + ML problem, explained
 ├── docs/
 │   ├── CHALLENGE.md       # challenge logistics, data, scoring, rules
@@ -107,6 +110,18 @@ cd rust && cargo build --release
   --test-contigs <held_out_contig> \
   --out ../submission.tsv
 ```
+
+---
+
+## Usage & licensing
+
+This repository is **not** offered under an open-source license and is **not** free to use. See the full terms in [`LICENSE`](./LICENSE).
+
+- **All rights reserved by the author.** You may not use, copy, modify, or redistribute this code or its contents without **explicit prior permission from the author**.
+- **No commercial use.** Commercial use is **not permitted under any circumstances**, with or without permission.
+- Access to this repository does **not** grant any license or right to use it.
+
+If you would like to use this work, please **contact the author to request permission** first.
 
 ---
 
