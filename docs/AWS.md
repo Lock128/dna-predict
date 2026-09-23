@@ -386,11 +386,16 @@ Run this once per species (octopus, oyster, moth, milkweed bug, dogfish). Each
 run is an independent Fargate job — submit them together and they run in
 parallel on the queue. Watch progress with `scripts/logs.sh`.
 
-> **Data access note:** the paths above assume the container has the data at
-> `/data`. Today the job role can read/write the bucket; wiring the container to
-> sync `s3://.../raw/<species>` to local `/data` on start (or read directly from
-> S3) is the one remaining glue step — see *Follow-ups* below. Until then, the
-> same `epic baseline` command runs on a laptop or the EC2 box in section 2.
+The container handles data movement itself: when the launcher sets an input
+prefix, the entrypoint syncs `s3://<bucket>/<inputPrefix>` → `/data`, runs
+`epic`, then syncs `/data/out` → `s3://<bucket>/submissions/<species>`. So the
+simplest invocation is **config-driven** — the split and paths come from
+`config/<species>.json`:
+
+```bash
+scripts/run-epic.sh --species oyster        # reads config/oyster.json
+scripts/run-epic.sh --species oyster --k 3  # same, sweep k-mer size
+```
 
 ### Step 3 — Score and compare to the baseline
 
@@ -431,17 +436,76 @@ For the real (unlabeled) test contigs there is no local score — run with
 `--no-score` and upload the resulting per-position, per-strand TSV from
 `s3://.../submissions/` to the EPIC leaderboard.
 
-### Follow-ups to make this fully hands-off
+### What's wired vs. still to do
 
-- **Container ⇄ S3 data:** add an entrypoint wrapper (or use the container's
-  `DATA_BUCKET` env) so the job syncs its species' `raw/` prefix to `/data` and
-  its output back to `submissions/` automatically. Right now the job role has
-  the permissions; the sync step is the glue to add.
-- **Contig splits:** commit the per-species train/test contig lists (or derive
-  them from the dataset manifest) so runs are reproducible.
-- **Official scoring in-cloud:** optionally add a small "score" job definition
-  that runs the organizers' scoring script on a submission for a
-  labeled species (Nematostella), so validation is one command too.
+Done:
+
+- **Container ⇄ S3 data** — the image entrypoint ([`docker/entrypoint.sh`](../docker/entrypoint.sh))
+  syncs the input prefix to `/data`, runs `epic`, and syncs `/data/out` back to
+  `submissions/<species>`. Pass-through mode (`epic <args>`) is unchanged.
+- **Per-species config** — [`config/<species>.json`](../config) holds the S3
+  input prefix, file names, and train/test contig split; `scripts/run-epic.sh
+  --species NAME` builds the whole command from it.
+
+Still to do (needs the real dataset):
+
+- **Fill in the real contig splits and file names** in `config/*.json` — the
+  committed values are placeholders (Zenodo record `22285753`, generic
+  `chrN` names). Confirm against the actual download.
+- **Official scoring in-cloud (optional):** add a small "score" job definition
+  that runs the organizers' scoring script on a labeled species (Nematostella),
+  so validation is one command too. For now, score locally.
+
+---
+
+## How to test it
+
+Three levels, cheapest first. Levels 1–2 need **no AWS** and are the fast way to
+know the pipeline is correct before spending anything.
+
+### 1. Local end-to-end (no AWS, ~1 min)
+
+Builds the binary, generates a tiny synthetic genome with a planted signal, runs
+the baseline, checks a submission is produced and beats random, then runs the
+same flow through the Docker container (if Docker is available):
+
+```bash
+scripts/test-e2e-local.sh
+```
+
+Expected tail: `END-TO-END TEST PASSED ✅` (AUPRC well above 0.3 on the planted
+signal). This exercises the exact `epic baseline` command and the container
+entrypoint used on Batch.
+
+### 2. Rust unit tests + diagram lint (no AWS)
+
+```bash
+cd rust && cargo test        # data / baseline / scoring unit tests
+npm run check:diagrams       # validates the mermaid diagrams
+```
+
+### 3. On AWS (real infrastructure)
+
+Once credentials are configured (SSO or an assumed role) and the stack is
+deployed:
+
+```bash
+npm run aws:outputs                       # confirm the stack is up
+scripts/ingest.sh <record> --wait         # load data into S3 (or a small test record)
+scripts/run-epic.sh --species nematostella  # config-driven job (syncs S3, runs, uploads)
+scripts/logs.sh                           # watch it run
+aws s3 ls "s3://$(scripts/outputs.sh | awk '/DataBucketName/{print $4}')/submissions/"
+```
+
+To smoke-test the cloud path cheaply **before** ingesting the full dataset, run
+a tiny job that just proves the wiring:
+
+```bash
+scripts/run-epic.sh -- baseline --help    # pass-through; a few seconds of Fargate
+```
+
+Then check the CloudWatch logs (`scripts/logs.sh`) for the help output. Tear
+down with `scripts/destroy.sh` when done.
 
 ---
 

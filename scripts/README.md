@@ -17,6 +17,21 @@ Every script is also exposed as an npm command from the repo root.
 | `scripts/outputs.sh` | `npm run aws:outputs` | Print the stack outputs |
 | `scripts/destroy.sh [--yes]` | `npm run aws:destroy` | Tear down the stack (S3 data bucket retained) |
 | `scripts/check-diagrams.sh` | `npm run check:diagrams` | Validate all mermaid diagrams in the repo |
+| `scripts/test-e2e-local.sh` | `npm run test:e2e` | Local end-to-end test (no AWS): build → synthetic data → baseline → container |
+
+## Config-driven runs
+
+`run-epic.sh --species <name>` reads `config/<name>.json` (input S3 prefix, file
+names, train/test contig split) and builds the whole `epic baseline` command,
+including the S3 sync prefixes. No long argument list needed:
+
+```bash
+scripts/run-epic.sh --species oyster          # from config/oyster.json
+scripts/run-epic.sh --species oyster --k 3    # override the k-mer size
+```
+
+The committed `config/*.json` use placeholder contig/file names — update them
+once the real Zenodo layout is confirmed (see `config/species.md`).
 
 ## Config
 

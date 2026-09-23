@@ -11,6 +11,7 @@
     "aws:run": "scripts/run-epic.sh",
     "aws:logs": "scripts/logs.sh",
     "aws:outputs": "scripts/outputs.sh",
-    "check:diagrams": "scripts/check-diagrams.sh"
+    "check:diagrams": "scripts/check-diagrams.sh",
+    "test:e2e": "scripts/test-e2e-local.sh"
   }
 }

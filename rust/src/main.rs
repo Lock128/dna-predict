@@ -118,6 +118,13 @@ fn subset_seqs(
 }
 
 fn write_submission(path: &PathBuf, pred: &InitiationTrack) -> io::Result<usize> {
+    // Create the parent directory if it doesn't exist (e.g. /data/out on a
+    // fresh container volume) so callers can point --out into a new subdir.
+    if let Some(parent) = path.parent() {
+        if !parent.as_os_str().is_empty() {
+            std::fs::create_dir_all(parent)?;
+        }
+    }
     let file = File::create(path)?;
     let mut w = BufWriter::with_capacity(1 << 20, file);
     writeln!(w, "contig\tposition\tstrand\tvalue")?;

@@ -151,11 +151,15 @@ for you. See [`scripts/README.md`](../scripts/README.md) and the
 [invocation section in `docs/AWS.md`](../docs/AWS.md#when--how-each-part-is-invoked).
 
 ```bash
-scripts/ingest.sh --wait                          # Zenodo -> S3 (Step Functions)
-scripts/run-epic.sh --species nematostella -- baseline --help   # launch a Batch job
-scripts/logs.sh                                   # tail job logs
-scripts/destroy.sh                                # tear down (S3 retained)
+scripts/ingest.sh --wait               # Zenodo -> S3 (Step Functions)
+scripts/run-epic.sh --species oyster   # config-driven: syncs S3, runs, uploads
+scripts/logs.sh                        # tail job logs
+scripts/destroy.sh                     # tear down (S3 retained)
 ```
+
+`run-epic.sh --species NAME` reads `config/NAME.json` (S3 input prefix + contig
+split) and the container entrypoint handles S3 sync in/out automatically. Use
+`-- <args>` for an explicit command (e.g. `scripts/run-epic.sh -- baseline --help`).
 
 <details>
 <summary>Equivalent raw AWS CLI (if you prefer no scripts)</summary>
@@ -222,14 +226,21 @@ npx cdk destroy     # tear down (the S3 bucket is RETAINed — delete manually)
 
 ## Notes & follow-ups
 
-- **Data access from the epic job:** the job role has read/write on the bucket.
-  How the container reads inputs (sync to local scratch vs. stream) depends on
-  the final Zenodo file layout — wire the exact `baseline` command (S3 paths /
-  local paths) once the data layout is confirmed. See `docs/AWS.md`.
+- **Data access from the epic job (done):** the image entrypoint
+  ([`docker/entrypoint.sh`](../docker/entrypoint.sh)) syncs the input S3 prefix
+  to `/data`, runs `epic`, and uploads `/data/out` to `submissions/<species>`.
+  The launcher Lambda sets the sync env vars from the `inputPrefix`/`species`
+  it's given.
+- **Contig splits (done, placeholders):** `config/<species>.json` holds each
+  species' S3 prefix, file names, and train/test split. Update the placeholder
+  contig/file names once the real Zenodo layout is confirmed.
 - **Download command:** `prepare-download` builds a `curl | aws s3 cp -` script
   per file from the Zenodo API. Confirm large files stream acceptably; if not,
   switch to download-to-scratch-then-upload (the download job already has 200 GB
   ephemeral storage).
+- **Testing:** `npm run test:e2e` (or `scripts/test-e2e-local.sh`) runs the full
+  pipeline locally on synthetic data with no AWS — see the "How to test" section
+  in [`docs/AWS.md`](../docs/AWS.md#how-to-test-it).
 - **Cost:** no NAT gateway and everything else is pay-per-use, so a
   deployed-but-idle stack costs ~$0 (only S3 storage + the ECR image + logs).
   Fargate is billed only while a job runs; the bucket is versioned with a
