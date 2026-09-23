@@ -5,11 +5,10 @@ name: Deploy infrastructure
 # - Pull requests: build + `cdk synth` only (validation, no AWS changes).
 # - Push to main:  build + `cdk deploy` to the target account via GitHub OIDC.
 #
-# No long-lived AWS keys: the deploy job assumes an IAM role through OIDC. The
-# role's trust policy is scoped to this repo + main branch (see
-# infra/lib/github-oidc.ts). Configure these repo settings first:
-#   Variables: AWS_REGION, AWS_ACCOUNT_ID, AWS_DEPLOY_ROLE_ARN
-#   (see infra/README.md for the one-time bootstrap.)
+# No long-lived AWS keys: the deploy job assumes an existing IAM role through
+# OIDC (the GitHub <> AWS connection is assumed to already exist). Configure
+# these repo secrets:
+#   Secrets: AWS_REGION, AWS_ACCOUNT_ID, AWS_DEPLOY_ROLE_ARN
 
 on:
   push:
@@ -47,8 +46,8 @@ jobs:
         env:
           # Synth doesn't need credentials; pass through if provided so any
           # environment-specific context resolves the same as on deploy.
-          CDK_DEPLOY_ACCOUNT: ${{ vars.AWS_ACCOUNT_ID }}
-          CDK_DEPLOY_REGION: ${{ vars.AWS_REGION }}
+          CDK_DEPLOY_ACCOUNT: ${{ secrets.AWS_ACCOUNT_ID }}
+          CDK_DEPLOY_REGION: ${{ secrets.AWS_REGION }}
 
   deploy:
     name: Deploy to AWS
@@ -75,8 +74,8 @@ jobs:
       - name: Configure AWS credentials (OIDC)
         uses: aws-actions/configure-aws-credentials@v4
         with:
-          role-to-assume: ${{ vars.AWS_DEPLOY_ROLE_ARN }}
-          aws-region: ${{ vars.AWS_REGION }}
+          role-to-assume: ${{ secrets.AWS_DEPLOY_ROLE_ARN }}
+          aws-region: ${{ secrets.AWS_REGION }}
           role-session-name: gha-dna-predict-deploy
 
       - run: npm ci
@@ -85,9 +84,5 @@ jobs:
       - name: CDK deploy
         run: npx cdk deploy --require-approval never
         env:
-          CDK_DEPLOY_ACCOUNT: ${{ vars.AWS_ACCOUNT_ID }}
-          CDK_DEPLOY_REGION: ${{ vars.AWS_REGION }}
-          # The account already has the OIDC provider after the first deploy;
-          # keep creating the role here (idempotent for this stack).
-          EPIC_GITHUB_REPO: ${{ github.repository }}
-          EPIC_GITHUB_BRANCH: main
+          CDK_DEPLOY_ACCOUNT: ${{ secrets.AWS_ACCOUNT_ID }}
+          CDK_DEPLOY_REGION: ${{ secrets.AWS_REGION }}

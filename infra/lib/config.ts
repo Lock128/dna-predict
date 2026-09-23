@@ -31,32 +31,10 @@ export interface EpicConfig {
   /** vCPU / memory (MiB) for the data-download Batch job. */
   readonly downloadJobVcpu: number;
   readonly downloadJobMemoryMiB: number;
-
-  /** GitHub OIDC configuration for the CI/CD deploy role. */
-  readonly github: GitHubConfig;
-}
-
-export interface GitHubConfig {
-  /** "owner/repo" — the GitHub repository allowed to deploy. */
-  readonly repo: string;
-  /** Branch allowed to deploy (deployments only run from here). */
-  readonly branch: string;
-  /**
-   * Whether this stack should create the GitHub OIDC provider + deploy role.
-   * Set false if the account already has a GitHub OIDC provider (only one is
-   * allowed per account) or the role is managed elsewhere.
-   */
-  readonly createDeployRole: boolean;
 }
 
 function env(name: string, fallback?: string): string | undefined {
   return process.env[name] ?? fallback;
-}
-
-function bool(name: string, fallback: boolean): boolean {
-  const v = process.env[name];
-  if (v === undefined) return fallback;
-  return ["1", "true", "yes", "on"].includes(v.toLowerCase());
 }
 
 /** Build the config from environment, with sensible defaults for the challenge. */
@@ -72,10 +50,5 @@ export function loadConfig(): EpicConfig {
     epicJobMemoryMiB: Number(env("EPIC_JOB_MEMORY_MIB", "16384")),
     downloadJobVcpu: Number(env("EPIC_DOWNLOAD_VCPU", "2")),
     downloadJobMemoryMiB: Number(env("EPIC_DOWNLOAD_MEMORY_MIB", "8192")),
-    github: {
-      repo: env("EPIC_GITHUB_REPO", "Lock128/dna-predict")!,
-      branch: env("EPIC_GITHUB_BRANCH", "main")!,
-      createDeployRole: bool("EPIC_CREATE_DEPLOY_ROLE", true),
-    },
   };
 }
