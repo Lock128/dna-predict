@@ -52,11 +52,24 @@ export class BatchCompute extends Construct {
       // The build context is the repo root; .dockerignore keeps it small.
     });
 
+    // --- security group: egress only, no ingress ----------------------------
+    // The tasks run in public subnets with public IPs (to avoid NAT cost), so
+    // we lock the network down at the SG level: allow all outbound (image pull,
+    // Zenodo, AWS APIs) but no inbound at all.
+    const sg = new ec2.SecurityGroup(this, "BatchSg", {
+      vpc: props.vpc,
+      description: "epic Batch tasks: egress only, no ingress",
+      allowAllOutbound: true,
+    });
+    // No addIngressRule calls -> the SG has zero inbound rules.
+
     // --- Fargate ARM64 (Graviton) compute environment -----------------------
     const computeEnv = new batch.FargateComputeEnvironment(this, "FargateArm", {
       vpc: props.vpc,
       spot: true, // cheaper; the baseline is restartable
-      vpcSubnets: { subnetType: ec2.SubnetType.PRIVATE_WITH_EGRESS },
+      // Public subnets + public IP so tasks reach the internet without a NAT.
+      vpcSubnets: { subnetType: ec2.SubnetType.PUBLIC },
+      securityGroups: [sg],
       maxvCpus: 64,
     });
 
@@ -88,6 +101,10 @@ export class BatchCompute extends Construct {
       fargateOperatingSystemFamily: ecs.OperatingSystemFamily.LINUX,
       jobRole,
       logging: ecs.LogDrivers.awsLogs({ streamPrefix: "epic", logGroup }),
+      // Required in public subnets without NAT so the task ENI gets a public IP
+      // and can pull the image from ECR / reach the internet. Ingress is still
+      // blocked by the egress-only security group.
+      assignPublicIp: true,
       // Default command; overridden per job submission by the launcher Lambda.
       command: ["--help"],
       environment: {
@@ -114,6 +131,8 @@ export class BatchCompute extends Construct {
       fargateOperatingSystemFamily: ecs.OperatingSystemFamily.LINUX,
       jobRole,
       logging: ecs.LogDrivers.awsLogs({ streamPrefix: "download", logGroup }),
+      // See note above: public IP needed to pull the image + reach Zenodo.
+      assignPublicIp: true,
       command: ["--version"],
       environment: {
         DATA_BUCKET: props.dataBucket.bucketName,

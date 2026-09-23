@@ -21,11 +21,26 @@ export class AppStack extends Stack {
     super(scope, id, props);
     const { config } = props;
 
-    // A small VPC with public + private-with-egress subnets. Fargate tasks run
-    // in the private subnets and reach S3/Zenodo via NAT.
+    // Cost-optimized VPC: no NAT gateway (the only 24/7 cost). Fargate tasks
+    // run in PUBLIC subnets with a public IP so they can pull the image and
+    // reach Zenodo directly; S3 traffic goes through a free gateway endpoint.
+    // Ingress is blocked at the security-group level (see BatchCompute).
     const vpc = new ec2.Vpc(this, "Vpc", {
       maxAzs: 2,
-      natGateways: 1,
+      natGateways: 0,
+      subnetConfiguration: [
+        {
+          name: "public",
+          subnetType: ec2.SubnetType.PUBLIC,
+          // Do not hand out public IPs by default; the Batch compute env
+          // assigns them only to task ENIs that need egress.
+          mapPublicIpOnLaunch: false,
+        },
+      ],
+      gatewayEndpoints: {
+        // Free S3 access without traversing the internet (no NAT needed).
+        S3: { service: ec2.GatewayVpcEndpointAwsService.S3 },
+      },
     });
 
     const storage = new Storage(this, "Storage", { prefix: config.prefix });
