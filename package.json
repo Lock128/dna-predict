@@ -1,0 +1,16 @@
+{
+  "name": "dna-predict",
+  "version": "0.1.0",
+  "description": "EPIC challenge — Rust pipeline + AWS infrastructure. This root package exposes operational scripts.",
+  "private": true,
+  "scripts": {
+    "aws:bootstrap": "scripts/bootstrap.sh",
+    "aws:deploy": "scripts/deploy.sh",
+    "aws:destroy": "scripts/destroy.sh",
+    "aws:ingest": "scripts/ingest.sh",
+    "aws:run": "scripts/run-epic.sh",
+    "aws:logs": "scripts/logs.sh",
+    "aws:outputs": "scripts/outputs.sh",
+    "check:diagrams": "scripts/check-diagrams.sh"
+  }
+}

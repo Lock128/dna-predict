@@ -1,0 +1,34 @@
+name: Check diagrams
+
+# Validates every mermaid diagram in the repo's markdown by rendering it with
+# the mermaid CLI. Catches broken diagram syntax before it reaches a reader.
+
+on:
+  push:
+    branches: [main]
+    paths:
+      - "**/*.md"
+      - "scripts/check-diagrams.sh"
+      - ".github/workflows/diagrams.yml"
+  pull_request:
+    paths:
+      - "**/*.md"
+      - "scripts/check-diagrams.sh"
+      - ".github/workflows/diagrams.yml"
+
+permissions:
+  contents: read
+
+jobs:
+  diagrams:
+    name: Render mermaid
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-node@v4
+        with:
+          node-version: "24"
+
+      - name: Validate mermaid diagrams
+        run: scripts/check-diagrams.sh

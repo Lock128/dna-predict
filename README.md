@@ -91,6 +91,7 @@ dna-predict/
 ├── docs/
 │   ├── CHALLENGE.md       # challenge logistics, data, scoring, rules
 │   └── AWS.md             # action plan for running on AWS (big data)
+├── scripts/              # ops wrappers (deploy, ingest, run, logs, destroy)
 ├── rust/                 # the epic crate: data, baseline, scoring, CLI
 │   ├── Cargo.toml
 │   └── src/{lib,data,baseline,scoring,main}.rs

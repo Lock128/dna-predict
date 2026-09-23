@@ -145,40 +145,49 @@ with required reviewers. Every push to `main` then deploys automatically.
 
 ## Run it
 
-### 1. Ingest the data (Zenodo → S3)
-
-Start the ingestion state machine (arn from the `IngestionStateMachineArn`
-output). It downloads the record's files into `s3://<bucket>/raw/<record>/`:
+The easiest way is the wrapper scripts in [`scripts/`](../scripts) (also exposed
+as `npm run aws:*` from the repo root); they resolve ARNs from the stack outputs
+for you. See [`scripts/README.md`](../scripts/README.md) and the
+[invocation section in `docs/AWS.md`](../docs/AWS.md#when--how-each-part-is-invoked).
 
 ```bash
+scripts/ingest.sh --wait                          # Zenodo -> S3 (Step Functions)
+scripts/run-epic.sh --species nematostella -- baseline --help   # launch a Batch job
+scripts/logs.sh                                   # tail job logs
+scripts/destroy.sh                                # tear down (S3 retained)
+```
+
+<details>
+<summary>Equivalent raw AWS CLI (if you prefer no scripts)</summary>
+
+```bash
+# 1. Ingest: start the state machine (arn from IngestionStateMachineArn output)
 aws stepfunctions start-execution \
   --state-machine-arn <IngestionStateMachineArn> \
   --input '{"record":"22285753"}'
-```
 
-### 2. Launch an epic job on Batch
-
-Invoke the launcher Lambda (name from the `LaunchJobFunctionName` output) with
-the container command. Data is mounted/read via S3 (see the job's `DATA_BUCKET`
-env and `docs/AWS.md` for the S3 access pattern):
-
-```bash
+# 2. Launch an epic job via the launcher Lambda (LaunchJobFunctionName output)
 aws lambda invoke \
   --function-name <LaunchJobFunctionName> \
   --payload '{"species":"nematostella","command":["baseline","--help"]}' \
   --cli-binary-format raw-in-base64-out \
   /dev/stdout
-```
 
-Or submit to Batch directly:
-
-```bash
+# ...or submit to Batch directly
 aws batch submit-job \
   --job-name epic-nematostella \
   --job-queue <JobQueueArn> \
   --job-definition <EpicJobDefinitionArn> \
   --container-overrides '{"command":["baseline","--help"]}'
 ```
+</details>
+
+### Tear down
+
+`scripts/destroy.sh` (or `npm run aws:destroy`) removes the stack; the S3 data
+bucket is **retained**. You can also run the manual **Destroy** GitHub Actions
+workflow ([`.github/workflows/destroy.yml`](../.github/workflows/destroy.yml)),
+which requires typing `destroy` to confirm.
 
 ## Useful commands
 

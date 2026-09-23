@@ -190,68 +190,145 @@ the launcher (or `aws batch submit-job`) to run the pipeline.
 
 ### Architecture
 
+Colors group resources by type: 🟠 compute (Batch), 🔴 serverless (Lambda /
+Step Functions), 🟢 storage (S3), 🟣 network (VPC / endpoints), 🔵 registry
+(ECR), 🩷 observability (logs), ⚫ CI/CD & external.
+
 ```mermaid
 flowchart TB
-    subgraph GH["GitHub"]
+    subgraph GH["🐙 GitHub"]
         repo["Repo: Lock128/dna-predict"]
-        gha["GitHub Actions<br/>(deploy on push to main)"]
+        gha["GitHub Actions<br/>deploy / bootstrap / destroy"]
         repo --> gha
     end
 
-    subgraph AWS["AWS account (eu-central-1)"]
-        ecr["ECR<br/>epic container image<br/>(linux/arm64)"]
+    zenodo["🌐 Zenodo dataset<br/>doi:10.5281/zenodo.22285753"]
 
-        subgraph VPC["VPC — no NAT gateway"]
-            subgraph PUB["Public subnets (2 AZs)"]
-                epicjob["Batch job: epic<br/>Fargate ARM64 / Spot<br/>public IP, egress-only SG"]
-                dljob["Batch job: download<br/>Fargate ARM64<br/>public IP, egress-only SG"]
-            end
-            s3ep["S3 gateway endpoint<br/>(free)"]
-        end
+    subgraph AWS["☁️ AWS account · eu-central-1"]
+        ecr["ECR<br/>epic image (arm64)"]
 
-        queue["Batch job queue"]
-        s3[("S3 data bucket<br/>raw/ processed/<br/>submissions/ models/")]
-
-        subgraph SFN["Step Functions: ingestion"]
-            prep["Lambda<br/>PrepareDownload"]
-            run["Batch download job<br/>(.sync)"]
-            verify["Lambda<br/>VerifyDownload"]
+        subgraph SFN["Step Functions — ingestion"]
+            prep["λ PrepareDownload"]
+            run["Batch download job"]
+            verify["λ VerifyDownload"]
             prep --> run --> verify
         end
 
-        launcher["Lambda<br/>launch-epic-job"]
+        launcher["λ launch-epic-job"]
+        queue["Batch job queue"]
+
+        subgraph VPC["VPC · no NAT gateway"]
+            subgraph PUB["Public subnets · 2 AZs · egress-only SG"]
+                epicjob["Batch: epic job<br/>Fargate arm64 / Spot"]
+                dljob["Batch: download job<br/>Fargate arm64"]
+            end
+            s3ep(["S3 gateway endpoint · free"])
+        end
+
+        s3[("S3 data bucket<br/>raw / processed / submissions / models")]
         logs["CloudWatch Logs"]
     end
-
-    zenodo["Zenodo<br/>doi:10.5281/zenodo.22285753"]
 
     gha -->|OIDC assume role| AWS
     gha -->|cdk deploy: build + push| ecr
 
-    queue --> epicjob
-    queue --> dljob
     launcher -->|SubmitJob| queue
     run -.->|SubmitJob| queue
+    queue --> epicjob
+    queue --> dljob
 
     ecr -.->|pull image| epicjob
     ecr -.->|pull image| dljob
 
     dljob -->|download| zenodo
-    dljob -->|write raw/| s3ep --> s3
-    epicjob <-->|read data / write submissions| s3ep
+    dljob -->|write raw/| s3ep
+    epicjob <-->|read / write submissions| s3ep
+    s3ep --- s3
 
-    epicjob --> logs
-    dljob --> logs
-    SFN --> logs
+    epicjob -.-> logs
+    dljob -.-> logs
+    SFN -.-> logs
+
+    classDef compute fill:#EC7211,stroke:#B25400,color:#fff;
+    classDef serverless fill:#D13212,stroke:#8C1A0B,color:#fff;
+    classDef storage fill:#3B8F3B,stroke:#245C24,color:#fff;
+    classDef network fill:#7D3AC1,stroke:#4E2379,color:#fff;
+    classDef registry fill:#1E6FB8,stroke:#124A7C,color:#fff;
+    classDef observability fill:#B0084D,stroke:#750233,color:#fff;
+    classDef external fill:#555,stroke:#222,color:#fff;
+    classDef cicd fill:#24292E,stroke:#000,color:#fff;
+
+    class epicjob,dljob,queue compute;
+    class prep,verify,launcher,run serverless;
+    class s3 storage;
+    class s3ep,VPC,PUB network;
+    class ecr registry;
+    class logs observability;
+    class zenodo,repo external;
+    class gha cicd;
 ```
 
-**Reading the diagram:** CI/CD (GitHub Actions) assumes an existing role via
-OIDC and runs `cdk deploy`, which builds the ARM64 image and pushes it to ECR.
-At runtime the ingestion state machine downloads the Zenodo dataset into S3 (via
-a Batch download job), and the launcher Lambda submits `epic` jobs to the queue.
-Batch tasks run on Fargate ARM64 in **public subnets with public IPs but an
-egress-only security group** (no inbound), and reach S3 through a free gateway
-endpoint — so there is **no NAT gateway** and effectively no idle cost.
+### When & how each part is invoked
+
+The sequence below shows the lifecycle end to end; the table maps each action to
+its trigger and the `scripts/` / npm command that runs it.
+
+```mermaid
+sequenceDiagram
+    autonumber
+    actor Dev as You / CI
+    participant GHA as GitHub Actions
+    participant CFN as CloudFormation
+    participant SFN as Step Functions
+    participant Batch as AWS Batch
+    participant S3 as S3 bucket
+    participant Z as Zenodo
+
+    Note over Dev,CFN: 1. Deploy (push to main, or scripts/deploy.sh)
+    Dev->>GHA: push to main
+    GHA->>CFN: cdk deploy (build + push image to ECR)
+    CFN-->>GHA: stack ready
+
+    Note over Dev,Z: 2. Ingest data (scripts/ingest.sh → Step Functions)
+    Dev->>SFN: StartExecution {record}
+    SFN->>Batch: submit download job (.sync)
+    Batch->>Z: download files
+    Batch->>S3: write raw/<record>/
+    SFN->>S3: verify objects landed
+    SFN-->>Dev: execution succeeded
+
+    Note over Dev,S3: 3. Run pipeline (scripts/run-epic.sh → launcher λ)
+    Dev->>Batch: launcher λ SubmitJob {command}
+    Batch->>S3: read inputs
+    Batch->>Batch: fit → predict → score
+    Batch->>S3: write submissions/
+
+    Note over Dev,CFN: 4. Tear down when idle (scripts/destroy.sh)
+    Dev->>CFN: cdk destroy (S3 retained)
+```
+
+| # | Action | When | How to invoke |
+|---|---|---|---|
+| — | **Bootstrap** the account/region (one-time) | Before the first deploy | `scripts/bootstrap.sh` / `npm run aws:bootstrap`, or the **CDK bootstrap** workflow |
+| 1 | **Deploy / update** infra + image | On every push to `main`; or manually | automatic via GitHub Actions; or `scripts/deploy.sh` / `npm run aws:deploy` |
+| 2 | **Ingest** the Zenodo dataset into S3 | Once per dataset (or when it changes) | `scripts/ingest.sh [record]` / `npm run aws:ingest` — starts the Step Functions state machine |
+| 3 | **Run** an `epic` job (baseline / predict / score) | Whenever you want a run | `scripts/run-epic.sh -- <epic args>` / `npm run aws:run` — invokes the launcher Lambda |
+| — | **Watch** job logs | While a job runs | `scripts/logs.sh` / `npm run aws:logs` |
+| — | **List** stack outputs | Anytime | `scripts/outputs.sh` / `npm run aws:outputs` |
+| 4 | **Destroy** the stack | When idle, to guarantee $0 | `scripts/destroy.sh` / `npm run aws:destroy`, or the **Destroy** workflow (manual) |
+
+All scripts read the region from `AWS_REGION` (default `eu-central-1`) and
+resolve resource names from the CloudFormation stack outputs, so you don't have
+to copy ARNs around. They assume your shell has AWS credentials (SSO or an
+assumed role).
+
+**Reading the architecture diagram:** CI/CD (GitHub Actions) assumes an existing
+role via OIDC and runs `cdk deploy`, which builds the ARM64 image and pushes it
+to ECR. At runtime the ingestion state machine downloads the Zenodo dataset into
+S3 (via a Batch download job), and the launcher Lambda submits `epic` jobs to
+the queue. Batch tasks run on Fargate ARM64 in **public subnets with public IPs
+but an egress-only security group** (no inbound), and reach S3 through a free
+gateway endpoint — so there is **no NAT gateway** and effectively no idle cost.
 
 ## Summary / decision
 

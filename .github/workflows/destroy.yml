@@ -1,0 +1,75 @@
+name: Destroy infrastructure
+
+# Manually-triggered teardown of the EPIC stack (to guarantee $0 when idle).
+# Uses the same OIDC role/secret as deploy. The S3 data bucket has a RETAIN
+# policy, so downloaded data survives the destroy.
+#
+# Requires:
+#   Secret:   AWS_ROLE_ARN
+#   Variable: AWS_REGION (defaults to eu-central-1)
+#
+# Safety: requires typing the confirmation phrase in the dispatch input.
+
+on:
+  workflow_dispatch:
+    inputs:
+      confirm:
+        description: 'Type "destroy" to confirm teardown of epic-app'
+        required: true
+        type: string
+
+permissions:
+  contents: read
+
+concurrency:
+  group: destroy-${{ github.ref }}
+  cancel-in-progress: false
+
+jobs:
+  destroy:
+    name: cdk destroy
+    runs-on: ubuntu-latest
+    environment: production
+    permissions:
+      contents: read
+      id-token: write # required for OIDC
+    defaults:
+      run:
+        working-directory: infra
+    steps:
+      - name: Verify confirmation
+        run: |
+          if [ "${{ inputs.confirm }}" != "destroy" ]; then
+            echo "::error::Confirmation phrase not matched (type 'destroy'). Aborting."
+            exit 1
+          fi
+
+      - name: Check required secret
+        run: |
+          if [ -z "${{ secrets.AWS_ROLE_ARN }}" ]; then
+            echo "::error::secret AWS_ROLE_ARN is empty or not set."
+            exit 1
+          fi
+
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-node@v4
+        with:
+          node-version: "24"
+          cache: npm
+          cache-dependency-path: infra/package-lock.json
+
+      - name: Configure AWS credentials (OIDC)
+        uses: aws-actions/configure-aws-credentials@v4
+        with:
+          role-to-assume: ${{ secrets.AWS_ROLE_ARN }}
+          aws-region: ${{ vars.AWS_REGION || 'eu-central-1' }}
+          role-session-name: gha-dna-predict-destroy
+
+      - run: npm ci
+      - run: npm run build
+
+      - name: CDK destroy
+        run: npx cdk destroy --force
+        env:
+          CDK_DEPLOY_REGION: ${{ vars.AWS_REGION || 'eu-central-1' }}
